@@ -323,7 +323,7 @@ details.info li{margin-bottom:6px}
 .r-cur{fill:var(--accent);fill-opacity:.2;stroke:var(--accent);stroke-width:2;stroke-linejoin:round;filter:drop-shadow(0 0 6px var(--glow))}
 .r-cmp{fill:#e8dcc0;fill-opacity:.08;stroke:#e8dcc0;stroke-width:1.6;stroke-linejoin:round}
 .r-dot{fill:var(--accent-2)}
-.legend{display:flex;flex-wrap:wrap;gap:6px 16px;justify-content:center;font-size:12px;color:var(--ink-2);margin-top:10px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;justify-center;font-size:12px;color:var(--ink-2);margin-top:10px}
 .legend span{display:inline-flex;align-items:center;gap:6px}
 .lg{width:16px;height:0;border-top:3px solid var(--accent);display:inline-block;border-radius:2px}
 .lg.cmp{border-top-color:#e8dcc0}
@@ -658,1771 +658,269 @@ function migrate(s) {
   if (td >= START && td <= END && td < s.startedOn) {
     s.startedOn = td;
     s.tasks.forEach(function (t) {
-      if (t.start > td) { t.start = td; t.v.forEach(function (v) { if (v.from > td) v.from = td; }); }
+      if (t.start > td) {
+        t.start = td;
+        t.v.forEach(function (v) { if (v.from > td) v.from = td; });
+      }
     });
   }
   return seedMissing(s);
 }
-function load() {
-  try {
-    var raw = window.localStorage.getItem(KEY);
-    if (raw) {
-      var s = JSON.parse(raw);
-      if (validState(s)) return migrate(s);
-    }
-  } catch (e) { storageOK = false; }
-  return fresh();
-}
-function save() {
-  try { window.localStorage.setItem(KEY, JSON.stringify(S)); storageOK = true; }
-  catch (e) { storageOK = false; }
-}
 
-/* ---------- tâches : définitions datées (le passé n'est jamais réécrit) ---------- */
-function byId(id) {
-  for (var i = 0; i < S.tasks.length; i++) if (S.tasks[i].id === id) return S.tasks[i];
-  return null;
-}
-function verOf(t, d) {
-  var v = t.v[0];
-  for (var i = 0; i < t.v.length; i++) { if (t.v[i].from <= d) v = t.v[i]; else break; }
-  return v;
-}
-function activeOn(t, d) { return d >= t.start && (!t.end || d <= t.end); }
-function plannedOn(t, d) {
-  if (!activeOn(t, d)) return false;
-  var f = verOf(t, d).f;
-  if (f.t === 'daily') return true;
-  if (f.t === 'days') return f.d.indexOf(weekday(d)) >= 0;
-  return false;
-}
-function weeklyOn(t, d) { return activeOn(t, d) && verOf(t, d).f.t === 'weekly'; }
-function shownOn(t, d) { return plannedOn(t, d) || weeklyOn(t, d); }
-function pIdx(id) { for (var i = 0; i < PILLARS.length; i++) if (PILLARS[i].id === id) return i; return 0; }
-function sortedFor(list, d) {
-  return list.slice().sort(function (a, b) {
-    var va = verOf(a, d), vb = verOf(b, d);
-    return (pIdx(va.pillar) - pIdx(vb.pillar)) ||
-      ((va.pr === 'must' ? 0 : 1) - (vb.pr === 'must' ? 0 : 1)) ||
-      (a.order - b.order);
-  });
-}
-
-/* ---------- journal des cases ---------- */
-function stOf(d, id) { var e = S.log[d] && S.log[d][id]; return (e && e.s) || null; }
-function noteOf(d, id) { var e = S.log[d] && S.log[d][id]; return (e && e.n) || ''; }
-function tidy(d, id) {
-  var day = S.log[d];
-  if (!day) return;
-  var e = day[id];
-  if (e && !e.s && !e.n) delete day[id];
-  if (!Object.keys(day).length) delete S.log[d];
-}
-function setSt(d, id, s) {
-  var day = S.log[d] || (S.log[d] = {});
-  var e = day[id] || (day[id] = {});
-  if (s) e.s = s; else delete e.s;
-  tidy(d, id);
-}
-function setNote(d, id, n) {
-  var day = S.log[d] || (S.log[d] = {});
-  var e = day[id] || (day[id] = {});
-  if (n && n.trim()) e.n = n; else delete e.n;
-  tidy(d, id);
-}
-function canEdit(d) { return d >= S.startedOn && d <= lastDay(); }
-
-/* ---------- calculs ---------- */
-function dayStats(d) {
-  var r = { done: 0, total: 0, na: 0 };
-  S.tasks.forEach(function (t) {
-    if (!plannedOn(t, d)) return;
-    var s = stOf(d, t.id);
-    if (s === 'na') r.na++; else { r.total++; if (s === 'done') r.done++; }
-  });
-  return r;
-}
-function rangeStats(a, b, only) {
-  var lo = a > S.startedOn ? a : S.startedOn;
-  var hi = b < lastDay() ? b : lastDay();
-  var r = { done: 0, total: 0, na: 0 };
-  for (var d = lo; d <= hi; d = addDays(d, 1)) {
-    for (var i = 0; i < S.tasks.length; i++) {
-      var t = S.tasks[i];
-      if (only && t.id !== only) continue;
-      if (!plannedOn(t, d)) continue;
-      var s = stOf(d, t.id);
-      if (s === 'na') r.na++; else { r.total++; if (s === 'done') r.done++; }
-    }
-  }
-  return r;
-}
-function weekCount(t, d) {
-  var ws = weekStart(d), n = 0, ld = lastDay();
-  for (var i = 0; i < 7; i++) {
-    var x = addDays(ws, i);
-    if (x > ld) break;
-    if (stOf(x, t.id) === 'done') n++;
-  }
-  return n;
-}
-function countDone(t, a, b) {
-  var lo = a > S.startedOn ? a : S.startedOn, hi = b < lastDay() ? b : lastDay(), n = 0;
-  for (var d = lo; d <= hi; d = addDays(d, 1)) if (stOf(d, t.id) === 'done') n++;
-  return n;
-}
-function weeksStats(t) {
-  /* semaines complètes (lundi → dimanche) déjà terminées, où la tâche était en place toute la semaine */
-  var ok = 0, tot = 0, td = todayStr();
-  var first = t.start > S.startedOn ? t.start : S.startedOn;
-  var ws = weekStart(first);
-  if (ws < first) ws = addDays(ws, 7);
-  for (; addDays(ws, 6) < td && addDays(ws, 6) <= END; ws = addDays(ws, 7)) {
-    var we = addDays(ws, 6);
-    if (t.end && t.end < we) break;
-    var v = verOf(t, we);
-    if (v.f.t !== 'weekly') continue;
-    tot++;
-    if (weekCount(t, ws) >= (v.f.q || 1)) ok++;
-  }
-  return { ok: ok, total: tot };
-}
-function streaks(t) {
-  var first = t.start > S.startedOn ? t.start : S.startedOn;
-  var last = lastDay();
-  if (t.end && t.end < last) last = t.end;
-  var td = todayStr(), run = 0, best = 0;
-  for (var d = first; d <= last; d = addDays(d, 1)) {
-    if (!plannedOn(t, d)) continue;
-    var s = stOf(d, t.id);
-    if (s === 'na') continue;                      /* N/A ne casse jamais une série */
-    if (s === 'done') { run++; if (run > best) best = run; }
-    else if (d !== td) run = 0;                    /* le jour en cours n'est pas encore « manqué » */
-  }
-  return { cur: run, best: best };
-}
-function missedList() {
-  var out = [], td = todayStr();
-  for (var i = 1; i <= 7; i++) {
-    var d = addDays(td, -i);
-    if (d < S.startedOn || d < START || d > END) continue;
-    var items = S.tasks.filter(function (t) { return plannedOn(t, d) && !stOf(d, t.id); });
-    if (items.length) out.push({ d: d, items: sortedFor(items, d) });
-  }
-  return out;
-}
-
-/* ---------- gabarits ---------- */
-function ring(p) {
-  var c = 2 * Math.PI * 34, off = c * (1 - (p || 0) / 100);
-  return '<svg class="ring" viewBox="0 0 80 80" role="img" aria-label="Complétion du jour"><circle cx="40" cy="40" r="34" class="ring-bg"/>' +
-    '<circle cx="40" cy="40" r="34" class="ring-fg" stroke-dasharray="' + c.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" transform="rotate(-90 40 40)"/>' +
-    '<text x="40" y="45.5" text-anchor="middle" class="ring-t">' + (p === null ? '—' : p + ' %') + '</text></svg>';
-}
-function freqLabel(f) {
-  if (f.t === 'daily') return 'Tous les jours';
-  if (f.t === 'days') return f.d.slice().sort().map(function (i) { return DAYS_S[i]; }).join(', ');
-  return f.q + (f.q > 1 ? ' fois' : ' fois') + ' par semaine';
-}
-
-function timeCard(ti) {
-  var l1, l2 = '';
-  if (ti.phase === 'before') l1 = 'Début dans ' + pl(ti.daysUntil, 'jour', 'jours');
-  else if (ti.phase === 'after') l1 = 'DON LEVELING terminé';
-  else { l1 = 'Jour ' + ti.cur + ' sur ' + ti.total; l2 = pl(ti.left, 'jour restant', 'jours restants'); }
-  var p = fr1(ti.pct);
-  return '<section class="card b-time" aria-label="Progression du temps">' +
-    '<div class="time-head"><span class="time-pct">' + p + ' %</span><span class="time-lbl">du temps écoulé</span></div>' +
-    '<div class="track"><i class="fill" style="width:' + ti.pct + '%"></i><i class="mark" style="left:' + ti.pct + '%"></i></div>' +
-    '<div class="time-meta"><span>' + l1 + '</span><span>' + l2 + '</span></div></section>';
-}
-
-function rowHTML(t, d, can) {
-  var v = verOf(t, d), s = stOf(d, t.id), note = noteOf(d, t.id), key = t.id + '|' + d;
-  var cls = 'task' + (s === 'done' ? ' done' : '') + (s === 'na' ? ' na' : '') + (openKey === key ? ' open' : '') + (popKey === key ? ' pop' : '');
-  var meta = '';
-  if (v.f.t === 'weekly') {
-    var n = weekCount(t, d), q = v.f.q, pips = '';
-    for (var i = 0; i < q; i++) pips += '<i class="' + (i < n ? 'on' : '') + '"></i>';
-    meta = '<span class="pips" aria-hidden="true">' + pips + '</span><span>' + n + ' / ' + q + ' cette semaine</span>' + (n >= q ? '<span class="tag ok">QUOTA ATTEINT</span>' : '');
-  } else if (v.f.t === 'days') {
-    meta = '<span>' + esc(freqLabel(v.f)) + '</span>';
-  }
-  var panel = '';
-  if (openKey === key) {
-    panel = '<div class="t-panel"><button class="pill' + (s === 'na' ? ' on' : '') + '" data-a="na">' + (s === 'na' ? 'Annuler N/A' : 'Marquer N/A') + '</button>' +
-      '<input class="note" maxlength="240" placeholder="Note du jour (facultatif)" value="' + esc(note) + '" aria-label="Note pour cette tâche"></div>';
-  }
-  var box = s === 'done' ? IC.check : (s === 'na' ? '<b>N/A</b>' : '');
-  return '<div class="' + cls + '" data-tid="' + t.id + '" data-d="' + d + '">' +
-    '<button class="task-main" data-a="toggle" role="checkbox" aria-checked="' + (s === 'done') + '"' + (can ? '' : ' disabled') + '>' +
-      '<span class="box">' + box + '</span>' +
-      '<span class="t-body"><span class="t-name">' + esc(v.name) + '</span>' +
-      (meta ? '<span class="t-meta">' + meta + '</span>' : '') +
-      (note ? '<span class="t-note">' + esc(note) + '</span>' : '') + '</span>' +
-      (v.pr === 'should' ? '<span class="tag">SHOULD DO</span>' : '') +
-    '</button>' +
-    '<button class="more" data-a="more" aria-label="Options : N/A et note"' + (can ? '' : ' disabled') + '>' + IC.dots + '</button>' +
-    panel + '</div>';
-}
-
-function checklistHTML(d) {
-  var list = sortedFor(S.tasks.filter(function (t) { return shownOn(t, d); }), d);
-  if (!list.length) return '<p class="empty">Aucune tâche prévue ce jour.</p>';
-  var can = canEdit(d), g = { deen: [], character: [], life: [] };
-  list.forEach(function (t) { g[verOf(t, d).pillar].push(t); });
-  function grp(id, label) {
-    if (!g[id].length) return '';
-    return '<div class="sub-t">' + label + '</div>' + g[id].map(function (t) { return rowHTML(t, d, can); }).join('');
-  }
-  var h = '';
-  if (g.deen.length || g.character.length) {
-    h += '<div class="block"><h3 class="block-t">DEEN &amp; CHARACTER</h3>' + grp('deen', 'Deen') + grp('character', 'Character') + '</div>';
-  }
-  if (g.life.length) {
-    h += '<div class="block"><h3 class="block-t">LIFE</h3>' + g.life.map(function (t) { return rowHTML(t, d, can); }).join('') + '</div>';
-  }
-  return h;
-}
-
-function scoreCard(d) {
-  var st = dayStats(d), p = pct(st.done, st.total);
-  var wk = rangeStats(weekStart(d), d), mo = rangeStats(d.slice(0, 7) + '-01', d), all = rangeStats(S.startedOn, d);
-  function cell(lbl, r) {
-    var q = pct(r.done, r.total);
-    return '<div><b>' + r.done + ' / ' + r.total + '</b><span>' + lbl + '</span>' + (q === null ? '' : '<em>' + q + ' %</em>') + '</div>';
-  }
-  return '<section class="card b-score" aria-label="Régularité">' +
-    '<div class="score-row">' + ring(p) +
-    '<div class="score-txt">' + st.done + ' sur ' + st.total + ' tâches cochées aujourd\'hui<small>' +
-    (st.na ? pl(st.na, 'tâche N/A exclue', 'tâches N/A exclues') : 'Aucune tâche N/A') + '</small></div></div>' +
-    '<div class="cons">' + cell("Aujourd'hui", st) + cell('Cette semaine', wk) + cell('Ce mois', mo) + cell('Depuis le début', all) + '</div>' +
-    '<p class="fine">Ces chiffres comptent uniquement des cases cochées. Ils ne mesurent ni ma foi, ni la qualité de mes actes, ni ma valeur.</p></section>';
-}
-
-function prioCard(d) {
-  var must = S.tasks.filter(function (t) { return plannedOn(t, d) && verOf(t, d).pr === 'must' && stOf(d, t.id) !== 'na'; });
-  var rest = sortedFor(must.filter(function (t) { return stOf(d, t.id) !== 'done'; }), d);
-  var h = '<section class="card b-prio"><h2 class="h">PRIORITÉS DU JOUR</h2>';
-  if (!must.length) h += '<p class="empty">Aucun MUST DO prévu aujourd\'hui.</p>';
-  else if (!rest.length) h += '<p class="ok-line">Tous tes MUST DO du jour sont cochés.</p>';
-  else {
-    h += '<p class="kv"><b>' + rest.length + '</b> MUST DO restants sur ' + must.length + '</p><div class="chips">' +
-      rest.map(function (t) { return '<span class="chipx">' + esc(verOf(t, d).name) + '</span>'; }).join('') + '</div>';
-  }
-  return h + '</section>';
-}
-
-function quickCard() {
-  function b(v, ic, l) { return '<button class="qbtn" data-a="go" data-v="' + v + '">' + IC[ic] + l + '</button>'; }
-  return '<section class="card b-quick"><h2 class="h2">ACCÈS RAPIDE</h2><div class="quick">' +
-    b('today', 'check', "Aujourd'hui") + b('progress', 'chart', 'Progression') + b('goals', 'target', 'Objectifs') +
-    b('chapters', 'layers', 'Chapitres') + b('wins', 'star', 'Wins') + b('mar31', 'flag', 'Mar 31') +
-    b('settings', 'sliders', 'Réglages') + '</div></section>';
-}
-
-function banners() {
-  var h = '';
-  if (!storageOK) {
-    h += '<div class="banner warn"><p>Le stockage local est bloqué sur cet appareil : tes cases ne seront pas conservées après actualisation. Exporte ta sauvegarde souvent.</p><button class="btn sm ghost" data-a="go" data-v="settings">Réglages</button></div>';
-  }
-  var td = todayStr(), msg = null;
-  var le = S.settings.lastExport;
-  if (le) {
-    var age = dn(td) - dn(localYMD(le));
-    if (age > 7) msg = 'Ta dernière sauvegarde date de ' + pl(age, 'jour', 'jours') + '.';
-  } else if (td >= START && dn(td) - dn(S.startedOn) >= 7) {
-    msg = "Tu n'as pas encore exporté de sauvegarde.";
-  }
-  if (msg) h += '<div class="banner"><p>' + msg + '</p><button class="btn sm ghost" data-a="go" data-v="settings">Sauvegarder</button></div>';
-  return h;
-}
-
-/* ---------- pages ---------- */
-function homeHTML() {
-  var td = todayStr(), ti = timeInfo(td);
-  var h = banners() + '<div class="home-grid">' + timeCard(ti);
-  if (ti.phase === 'during') {
-    var st = dayStats(td);
-    h += '<section class="card b-today" aria-label="Checklist du jour"><div class="today-head"><div><h2 class="h">AUJOURD\'HUI</h2><div class="today-date">' + fmtLong(td) + '</div></div>' +
-      '<div class="chip" aria-label="Tâches cochées">' + st.done + ' / ' + st.total + '</div></div>' + checklistHTML(td) + '</section>';
-    h += scoreCard(td) + prioCard(td);
-  } else if (ti.phase === 'before') {
-    h += '<section class="card b-today"><h2 class="h">AUJOURD\'HUI</h2><p class="empty">DON LEVELING commence le ' + fmtDM(START) + ' 2026. Ta checklist apparaîtra ce jour-là.</p></section>';
-  } else {
-    h += '<section class="card b-today"><h2 class="h">DON LEVELING TERMINÉ</h2><p class="empty">Le suivi est terminé. Ton historique reste disponible dans Progression.</p>' +
-      '<div class="btns"><button class="btn" data-a="go" data-v="progress">Voir ma progression</button></div></section>';
-  }
-  return h + chapterCard() + missionsCard() + radarCard() + quickCard() + '</div>';
-}
-
-function defaultDate() {
-  var td = todayStr();
-  if (td < START) return null;
-  var d = td > END ? END : td;
-  return d < S.startedOn ? S.startedOn : d;
-}
-
-function todayHTML() {
-  var td = todayStr();
-  if (td < START) {
-    return '<section class="card"><h2 class="h">AUJOURD\'HUI</h2><p class="empty">DON LEVELING commence le ' + fmtDM(START) + ' 2026. Ta checklist apparaîtra ce jour-là.</p></section>';
-  }
-  var d = vdate || defaultDate();
-  var lo = S.startedOn, hi = lastDay();
-  if (d < lo) d = lo;
-  if (d > hi) d = hi;
-  var st = dayStats(d);
-  var h = '<div class="datebar">' +
-    '<button class="arrow" data-a="prev" aria-label="Jour précédent"' + (d <= lo ? ' disabled' : '') + '>' + IC.left + '</button>' +
-    '<div class="datemid"><strong>' + fmtLong(d) + '</strong><small>' + (d === td ? "Aujourd'hui" : 'Journée passée') + '</small></div>' +
-    '<button class="arrow" data-a="next" aria-label="Jour suivant"' + (d >= hi ? ' disabled' : '') + '>' + IC.right + '</button></div>' +
-    '<div class="row between" style="margin:0 0 12px"><label class="datebtn">Choisir une date<input type="date" data-a="pickdate" min="' + lo + '" max="' + hi + '" value="' + d + '" aria-label="Choisir une date"></label>' +
-    (d !== hi ? '<button class="btn sm ghost" data-a="gotoday">Revenir à aujourd\'hui</button>' : '') + '</div>';
-  if (d !== td) h += '<div class="past">Tu corriges une journée passée. Rien n\'est jamais coché automatiquement.</div>';
-  h += '<section class="card"><div class="today-head"><div><h2 class="h">CHECKLIST</h2></div><div class="chip">' + st.done + ' / ' + st.total + '</div></div>' +
-    '<div class="row" style="gap:16px;margin:4px 0 0;color:var(--muted);font-size:12.5px"><span>' + (pct(st.done, st.total) === null ? '—' : pct(st.done, st.total) + ' % du jour') + '</span><span>' + (st.na ? pl(st.na, 'N/A', 'N/A') : 'Aucun N/A') + '</span></div>' +
-    checklistHTML(d) + '</section>';
-  var miss = missedList();
-  h += '<section class="card"><h2 class="h2">TÂCHES MANQUÉES (7 DERNIERS JOURS)</h2>';
-  if (!miss.length) h += '<p class="empty">Aucune tâche manquée sur les 7 derniers jours.</p>';
-  else {
-    h += '<div style="margin-top:6px">' + miss.map(function (m) {
-      return '<button class="miss-day" data-a="opendate" data-d="' + m.d + '"><span class="miss-d">' + fmtShort(m.d) + '</span><span class="miss-l">' +
-        m.items.map(function (t) { return esc(verOf(t, m.d).name); }).join(', ') + '</span></button>';
-    }).join('') + '</div><p class="fine">Touche une journée pour la corriger si tu avais oublié de cocher.</p>';
-  }
-  return h + '</section>';
-}
-
-function habitCard(t, last) {
-  var v = t.v[t.v.length - 1], ended = !!t.end;
-  var first = t.start > S.startedOn ? t.start : S.startedOn;
-  var ref = ended ? t.end : last;
-  var ws = weekStart(ref), ms = ref.slice(0, 7) + '-01';
-  var dots = '';
-  for (var i = 13; i >= 0; i--) {
-    var x = addDays(last, -i), c = 'off', ttl = fmtShort(x);
-    if (x >= first && x <= (ref < last ? ref : last)) {
-      var s = stOf(x, t.id);
-      if (verOf(t, x).f.t === 'weekly') { c = s === 'done' ? 'done' : (s === 'na' ? 'na' : 'off'); }
-      else if (plannedOn(t, x)) c = s === 'done' ? 'done' : (s === 'na' ? 'na' : (x === todayStr() ? 'pend' : 'miss'));
-    }
-    dots += '<i class="dot ' + c + '" title="' + ttl + '"></i>';
-  }
-  var head = '<div class="hhead"><span class="hname">' + esc(v.name) + (ended ? ' <span class="tag">RETIRÉE</span>' : '') + '</span>';
-  var body;
-  if (v.f.t === 'weekly') {
-    var n = weekCount(t, ref), q = v.f.q, w = weeksStats(t);
-    var td = stOf(ref, t.id);
-    head += '<span class="hstreak">Quota : ' + q + ' par semaine</span></div>';
-    body = '<div class="hstats"><div><b>' + (td === 'done' ? '✓' : (td === 'na' ? 'N/A' : '—')) + '</b><small>Aujourd\'hui</small></div>' +
-      '<div><b>' + n + ' / ' + q + '</b><small>Semaine</small></div>' +
-      '<div><b>' + countDone(t, ms, ref) + '</b><small>Fois ce mois</small></div>' +
-      '<div><b>' + (w.total ? w.ok + ' / ' + w.total : '—') + '</b><small>Semaines réussies</small></div></div>';
-  } else {
-    var sk = streaks(t);
-    var a = rangeStats(ref, ref, t.id), wk = rangeStats(ws, ref, t.id), mo = rangeStats(ms, ref, t.id), all = rangeStats(first, ref, t.id);
-    var todaySt = plannedOn(t, ref) ? (stOf(ref, t.id) === 'done' ? '✓' : (stOf(ref, t.id) === 'na' ? 'N/A' : '—')) : 'Pas prévu';
-    head += '<span class="hstreak">' + (ended ? '' : 'Série ' + pl(sk.cur, 'jour', 'jours') + ' ') + (sk.best ? '(record ' + sk.best + ')' : '') + '</span></div>';
-    body = '<div class="hstats"><div><b>' + todaySt + '</b><small>Aujourd\'hui</small></div>' +
-      '<div><b>' + wk.done + ' / ' + wk.total + '</b><small>Semaine</small></div>' +
-      '<div><b>' + mo.done + ' / ' + mo.total + '</b><small>Mois</small></div>' +
-      '<div><b>' + all.done + ' / ' + all.total + '</b><small>Depuis le début</small>' + (all.na ? '<em>(' + all.na + ' N/A)</em>' : '') + '</div></div>';
-    void a;
-  }
-  return '<div class="habit' + (ended ? ' old' : '') + '">' + head + body + '<div class="dots" aria-label="14 derniers jours">' + dots + '</div></div>';
-}
-
-function progressHTML() {
-  var td = todayStr();
-  if (td < START) {
-    return '<section class="card"><h2 class="h">PROGRESSION</h2><p class="empty">Le suivi commence le ' + fmtDM(START) + ' 2026. Reviens ce jour-là.</p></section>';
-  }
-  var last = lastDay();
-  var ws = weekStart(last), ms = last.slice(0, 7) + '-01';
-  var st = dayStats(last), wk = rangeStats(ws, last), mo = rangeStats(ms, last), all = rangeStats(S.startedOn, last);
-  function cell(lbl, r) {
-    var q = pct(r.done, r.total);
-    return '<div><b>' + r.done + ' / ' + r.total + '</b><span>' + lbl + '</span>' + (q === null ? '' : '<em>' + q + ' %</em>') + '</div>';
-  }
-  var h = '<section class="card"><h2 class="h">RÉGULARITÉ</h2><div class="cons">' + cell("Aujourd'hui", st) + cell('Cette semaine', wk) + cell('Ce mois', mo) + cell('Depuis le début', all) + '</div>' +
-    '<p class="fine">Calculé à partir des cases réellement cochées, sur les tâches réellement prévues (semaine = lundi → dimanche). Les tâches à quota hebdomadaire sont suivies à part. Ces chiffres ne mesurent ni ma foi, ni ma valeur.</p></section>';
-
-  /* habitudes */
-  var active = sortedFor(S.tasks.filter(function (t) { return !t.end; }), last);
-  var old = S.tasks.filter(function (t) { return t.end && (t.end >= S.startedOn); });
-  h += '<section class="card"><h2 class="h">HABITUDES</h2><div style="margin-top:6px">' +
-    active.map(function (t) { return habitCard(t, last); }).join('') +
-    old.map(function (t) { return habitCard(t, last); }).join('') + '</div></section>';
-
-  /* habitudes à consolider (présentation neutre) */
-  if (dn(last) - dn(S.startedOn) >= 6) {
-    var low = active.map(function (t) {
-      if (verOf(t, last).f.t === 'weekly') return null;
-      var r = rangeStats(ms, last, t.id);
-      return r.total >= 5 ? { t: t, r: r, q: r.done / r.total } : null;
-    }).filter(function (x) { return x && x.q < 0.8; }).sort(function (a, b) { return a.q - b.q; }).slice(0, 3);
-    if (low.length) {
-      h += '<section class="card"><h2 class="h2">À CONSOLIDER CE MOIS-CI</h2><div style="margin-top:6px">' +
-        low.map(function (x) { return '<div class="lowrow"><span>' + esc(x.t.v[x.t.v.length - 1].name) + '</span><b>' + x.r.done + ' / ' + x.r.total + '</b></div>'; }).join('') +
-        '</div><p class="fine">Les habitudes dont la régularité est la plus basse ce mois-ci. Aucun jugement : c\'est seulement une information.</p></section>';
-    }
-  }
-
-  /* historique des jours */
-  var rows = [], d = last;
-  for (; d >= S.startedOn; d = addDays(d, -1)) rows.push(d);
-  var shown = showAllHist ? rows : rows.slice(0, 21);
-  h += '<section class="card"><h2 class="h">HISTORIQUE DES JOURS</h2><div style="margin-top:6px">' +
-    shown.map(function (x) {
-      var s = dayStats(x), p = pct(s.done, s.total);
-      return '<button class="hday" data-a="opendate" data-d="' + x + '"><span class="hd">' + fmtShort(x) + '</span>' +
-        '<span class="hbar"><i style="width:' + (p || 0) + '%"></i></span>' +
-        '<span class="hv">' + s.done + ' / ' + s.total + (s.na ? '<small>' + s.na + ' N/A</small>' : '') + '</span></button>';
-    }).join('') + '</div>' +
-    (rows.length > 21 && !showAllHist ? '<div class="btns"><button class="btn ghost sm" data-a="allhist">Voir tout l\'historique (' + rows.length + ' jours)</button></div>' : '') +
-    '<p class="fine">Touche un jour pour voir les tâches prévues, tes cases, tes N/A et tes notes de cette date.</p></section>';
-  return h;
-}
-
-function backupText() {
-  return JSON.stringify({ app: 'DON LEVELING', format: 1, exportedAt: new Date().toISOString(), data: S }, null, 1);
-}
-function settingsHTML() {
-  var eff = effDate();
-  var h = '<section class="card"><h2 class="h">MES TÂCHES</h2>' +
-    '<p class="fine" style="margin-top:8px">Un changement s\'applique à partir d\'aujourd\'hui. Les jours passés ne sont jamais réécrits.</p>';
-  var act = sortedFor(S.tasks.filter(function (t) { return !t.end; }), eff);
-  PILLARS.forEach(function (p) {
-    var g = act.filter(function (t) { return verOf(t, eff).pillar === p.id; });
-    if (!g.length) return;
-    h += '<div class="sgrp">' + p.label + '</div>' + g.map(function (t) {
-      var v = verOf(t, eff);
-      return '<div class="srow"><div><div class="sname">' + esc(v.name) + '</div><div class="stags"><span class="tag' + (v.pr === 'must' ? ' ok' : '') + '">' + (v.pr === 'must' ? 'MUST DO' : 'SHOULD DO') + '</span><span class="tag">' + esc(freqLabel(v.f)) + '</span></div></div>' +
-        '<button class="btn ghost sm" data-a="edit" data-id="' + t.id + '">Modifier</button></div>';
-    }).join('');
-  });
-  h += '<div class="btns"><button class="btn" data-a="add">Ajouter une tâche</button></div></section>';
-
-  h += profileCard() + goalsSettingsCard();
-  h += '<section class="card"><h2 class="h">APPARENCE</h2><div class="swatches">' +
-    '<button class="sw' + (S.settings.accent === 'or' ? ' on' : '') + '" data-a="accent" data-v="or"><i style="background:#d6b25e"></i>Or</button>' +
-    '<button class="sw' + (S.settings.accent === 'vert' ? ' on' : '') + '" data-a="accent" data-v="vert"><i style="background:#3b9e79"></i>Vert profond</button></div></section>';
-
-  var le = S.settings.lastExport;
-  var leTxt = le ? (function () { var d = new Date(le); return fmtLong(localYMD(le)) + ' à ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); })() : 'Jamais';
-  h += '<section class="card"><h2 class="h">SAUVEGARDE</h2><p class="kv">Dernière sauvegarde exportée : <b>' + esc(leTxt) + '</b></p>' +
-    '<div class="btns">' + (DL ? '<button class="btn" data-a="export">Exporter (fichier)</button>' : '') +
-    '<button class="btn' + (DL ? ' ghost' : '') + '" data-a="copy">Copier la sauvegarde</button></div>' +
-    (showExp ? '<label class="lbl" for="expText">Texte de sauvegarde (à copier et à garder)</label><textarea class="txt" id="expText" readonly>' + esc(backupText()) + '</textarea>' : '<div class="btns"><button class="btn ghost sm" data-a="showexp">Afficher le texte de sauvegarde</button></div>') +
-    '<label class="lbl" for="impText">Importer une sauvegarde</label>' +
-    '<textarea class="txt" id="impText" placeholder="Colle ici le texte de ta sauvegarde"></textarea>' +
-    '<div class="btns"><button class="btn ghost sm" data-a="import">Importer le texte</button>' +
-    '<label class="btn ghost sm" style="display:inline-flex;align-items:center;cursor:pointer">Choisir un fichier<input type="file" id="impFile" accept=".json,application/json,text/plain" style="display:none"></label></div></section>';
-
-  h += '<section class="card"><h2 class="h">À SAVOIR</h2><details class="info"><summary>Où sont mes données ?</summary><ul>' +
-    '<li>Elles restent dans le navigateur de cet appareil. Il n\'y a pas de synchronisation : sur un autre appareil, DON LEVELING sera vide tant que tu n\'importes pas ta sauvegarde. Garde ton téléphone comme appareil principal.</li>' +
-    '<li>Le navigateur peut effacer ces données (nettoyage du stockage, mode privé). C\'est pourquoi l\'export hebdomadaire est important, par exemple pendant ta revue de la semaine.</li>' +
-    '<li>DON LEVELING n\'envoie aucune notification. Mets une alarme sur ton téléphone si tu veux un rappel.</li></ul></details>' +
-    '<div class="btns"><button class="btn danger sm" data-a="reset">Réinitialiser toutes mes données</button></div></section>';
-  return h;
-}
-
-/* =========================================================
-   PHASE 2 — objectifs, chapitres, radar, Wins, Mar 31, + UPDATE
-   ========================================================= */
-
-var DIMS = [
-  { id: 'deen', label: 'DEEN', short: 'DEEN' },
-  { id: 'character', label: 'CHARACTER', short: 'CHARACTER' },
-  { id: 'sport', label: 'SPORT', short: 'SPORT' },
-  { id: 'ia', label: 'COMPÉTENCES IA', short: 'IA' },
-  { id: 'lang', label: 'LANGUE & LECTURE', short: 'LANGUE' },
-  { id: 'business', label: 'BUSINESS', short: 'BUSINESS' },
-  { id: 'finance', label: 'FINANCES', short: 'FINANCES' }
-];
-var CATS = ['deen', 'ia', 'sport', 'business', 'finance', 'lang'];
-var CAT_TITLE = { deen: 'Deen', ia: 'Compétences IA', sport: 'Sport', business: 'Business', finance: 'Finances', lang: 'Langue & lecture' };
-var CAT_IC = { deen: 'moon', ia: 'spark', sport: 'bolt', business: 'brief', finance: 'coin', lang: 'book' };
-var RADAR_TARGET = 90;
-var STATUS = { not: 'Pas commencé', prog: 'En cours', done: 'Terminé' };
-var memo = {};
-var radarCmp = 'none';
-var chapOpen = null;
-var up = null;
-var gEd = null;
-var mEd = null;
-var chEd = null;
-var m31Ed = null;
-
-function defaultDim(id, pillar) {
-  if (pillar === 'deen' || pillar === 'character') return pillar;
-  var m = { ai: 'ia', english: 'lang', reading: 'lang', sport: 'sport', money: 'finance' };
-  return m[id] || null;
-}
-function fmtNum(n) { return String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0'); }
-function clamp01(x) { return Math.max(0, Math.min(1, x)); }
-function uid(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
-function num(v) {
-  var x = parseFloat(String(v).replace(/[\s\u00a0]/g, '').replace(',', '.'));
-  return isNaN(x) ? null : x;
-}
-
-/* ---------- données de départ (issues de l'onboarding) ---------- */
-function M(id, name, auto) { var m = { id: id, name: name, doneOn: null }; if (auto) m.auto = auto; return m; }
-function seedGoals() {
-  return [
-    { id: 'g_ia', cat: 'ia', big: true, kind: 'ms', status: 'auto', name: "Maîtriser l'IA appliquée et l'automatisation",
-      startText: 'Débutant complet', targetText: "Utiliser et automatiser avec l'IA au quotidien",
-      milestones: [
-        M('m_ia1', "Comprendre les bases de l'IA (ce qu'elle sait faire, ses limites)"),
-        M('m_ia2', "Écrire des instructions efficaces pour l'IA"),
-        M('m_ia3', 'Automatiser une première tâche répétitive'),
-        M('m_ia4', "Utiliser l'IA sur une vraie tâche de mon travail"),
-        M('m_ia5', "30 jours de session IA d'affilée", { type: 'streak', task: 'ai', n: 30 })
-      ] },
-    { id: 'g_tool', cat: 'ia', big: true, kind: 'ms', status: 'auto', name: "Créer une application ou un outil avec l'IA",
-      startText: "Pas encore d'idée d'outil", targetText: "Un outil que quelqu'un d'autre utilise",
-      milestones: [
-        M('m_tool1', "Trouver mon idée d'outil"),
-        M('m_tool2', 'Décrire le problème qu\'il résout'),
-        M('m_tool3', 'Construire un premier prototype'),
-        M('m_tool4', "L'utiliser moi-même pendant une semaine"),
-        M('m_tool5', "Le faire tester par quelqu'un d'autre"),
-        M('m_tool6', 'Le mettre en ligne')
-      ] },
-    { id: 'g_sport', cat: 'sport', big: true, kind: 'ms', status: 'auto', name: 'Prendre de la masse, gagner en endurance et en forme',
-      startText: 'Débutant', targetText: '4 séances par semaine, tenues dans la durée',
-      milestones: [
-        M('m_sp1', 'Noter mes mesures de départ (poids, tour de bras…)'),
-        M('m_sp2', '4 semaines réussies à 4 séances', { type: 'weeks', task: 'sport', n: 4 }),
-        M('m_sp3', '12 semaines réussies à 4 séances', { type: 'weeks', task: 'sport', n: 12 }),
-        M('m_sp4', '20 semaines réussies à 4 séances', { type: 'weeks', task: 'sport', n: 20 }),
-        M('m_sp5', 'Refaire mes mesures (fin décembre)'),
-        M('m_sp6', 'Refaire mes mesures (fin mars)')
-      ] },
-    { id: 'g_biz', cat: 'business', big: true, kind: 'ms', status: 'auto', name: 'Lancer une activité qui génère des revenus',
-      startText: "Pas encore d'idée définie", targetText: 'Un premier client, puis un premier revenu',
-      milestones: [
-        M('m_biz1', "Trouver mon idée d'activité"),
-        M('m_biz2', 'Définir qui sont mes clients'),
-        M('m_biz3', 'Créer ma première offre'),
-        M('m_biz4', 'Parler à 5 clients potentiels'),
-        M('m_biz5', 'Obtenir mon premier client'),
-        M('m_biz6', 'Encaisser mon premier revenu')
-      ] },
-    { id: 'g_save', cat: 'finance', big: true, kind: 'num', status: 'auto', name: 'Épargner 3 000 000 FCFA',
-      unit: 'FCFA', target: 3000000, start: null, hist: [], startText: '', targetText: '3 000 000 FCFA', milestones: [] },
-    { id: 'g_budget', cat: 'finance', big: false, kind: 'ms', status: 'auto', name: 'Suivre mes dépenses et tenir un budget',
-      startText: '', targetText: 'Dépenses notées chaque jour et budget tenu',
-      milestones: [
-        M('m_bud1', 'Faire mon premier budget mensuel'),
-        M('m_bud2', 'Tenir mon budget un mois complet'),
-        M('m_bud3', '30 jours de dépenses notées d\'affilée', { type: 'streak', task: 'money', n: 30 })
-      ] },
-    { id: 'g_invest', cat: 'finance', big: false, kind: 'ms', status: 'auto', name: 'Comprendre les bases de la finance et de l\'investissement',
-      startText: '', targetText: 'Comprendre les bases avant de décider',
-      milestones: [
-        M('m_inv1', 'Comprendre la différence entre épargner et investir'),
-        M('m_inv2', "Connaître les risques d'un investissement"),
-        M('m_inv3', 'Écrire ma stratégie d\'épargne')
-      ] },
-    { id: 'g_lang', cat: 'lang', big: false, kind: 'ms', status: 'auto', name: "Parler anglais avec plus d'aisance",
-      startText: '', targetText: "Une conversation en anglais chaque jour",
-      milestones: [
-        M('m_lg1', "7 jours de conversation en anglais d'affilée", { type: 'streak', task: 'english', n: 7 }),
-        M('m_lg2', "30 jours de conversation en anglais d'affilée", { type: 'streak', task: 'english', n: 30 }),
-        M('m_lg3', 'Tenir 15 minutes de conversation sans traduire')
-      ] },
-    { id: 'g_read', cat: 'lang', big: false, kind: 'ms', status: 'auto', name: 'Lire régulièrement',
-      startText: '', targetText: '10 pages par jour',
-      milestones: [
-        M('m_rd1', "7 jours de lecture d'affilée", { type: 'streak', task: 'reading', n: 7 }),
-        M('m_rd2', "30 jours de lecture d'affilée", { type: 'streak', task: 'reading', n: 30 })
-      ] }
-  ];
-}
-function ck(t) { return { id: uid('k'), t: t, done: false }; }
-function seedChapters() {
-  function C(key, name, theme, intention, objectives, ms, habits, checklist, result) {
-    return { key: key, name: name, theme: theme, intention: intention, objectives: objectives, ms: ms, habits: habits, checklist: checklist.map(ck), result: result };
-  }
-  return [
-    C('2026-09', 'Fondations', 'Installer les bases',
-      "Profiter de mon temps libre pour installer mes habitudes avant le début du travail : Fajr, IA, sport, budget.",
-      ['Cocher mes MUST DO chaque jour', "Découvrir l'IA en partant de zéro", 'Commencer le sport : 4 séances par semaine', 'Noter mes dépenses et poser mon premier budget'],
-      ['m_ia1', 'm_sp1', 'm_bud1'], ['fajr', 'sleep', 'ai', 'sport'],
-      ['Fixer mon heure de coucher (avant 00h)', "Choisir mon outil d'IA principal", 'Faire ma première semaine complète à 4 séances', 'Écrire mon premier budget', 'Adapter mes tâches quand le travail commence'],
-      'Des habitudes lancées et une première semaine complète tenue.'),
-    C('2026-10', 'Rythme', 'Tenir le rythme avec le travail',
-      'Adapter mes tâches à mes horaires de travail et rester constant, même fatigué.',
-      ['Mettre à jour mes tâches selon mes horaires', 'Tenir 4 semaines de régularité', "Pratiquer l'IA sur des tâches réelles", 'Tenir mon budget'],
-      ['m_ia2', 'm_ia3', 'm_bud2'], ['fajr', 'ai', 'english', 'sport'],
-      ['Mettre à jour mes tâches selon mes horaires de travail', 'Faire ma revue hebdomadaire chaque semaine', 'Automatiser une tâche répétitive avec l\'IA', 'Exporter ma sauvegarde chaque semaine'],
-      'Un rythme stable malgré le travail.'),
-    C('2026-11', 'Exploration', 'Trouver mes idées',
-      "Explorer des idées d'activité et d'outil IA à partir de vrais problèmes que je vois autour de moi.",
-      ['Lister au moins 5 idées', 'Choisir la plus prometteuse', 'Parler à des personnes concernées', "Continuer à pratiquer l'IA"],
-      ['m_biz1', 'm_tool1'], ['ai', 'plan', 'english'],
-      ['Noter 5 problèmes que je peux résoudre', 'Parler à 3 personnes concernées', 'Choisir mon idée principale', "Décrire le problème qu'elle résout"],
-      'Une idée choisie et décrite.'),
-    C('2026-12', 'Construction', 'Construire un premier prototype',
-      "Passer de l'idée à quelque chose de concret que je peux montrer.",
-      ["Construire un prototype de l'outil ou de l'offre", 'Définir mes clients', "L'utiliser moi-même", 'Préparer les tests de janvier'],
-      ['m_tool3', 'm_biz2', 'm_sp5'], ['ai', 'plan', 'sleep'],
-      ['Définir la version minimale du prototype', 'Construire le prototype', 'Le tester moi-même pendant une semaine', 'Refaire mes mesures de sport (fin décembre)'],
-      'Un prototype que je peux montrer.'),
-    C('2027-01', 'Reprise', 'Reprendre les cours sans perdre le cap',
-      "Les cours du soir (18h-21h) reprennent : protéger mes habitudes clés et préparer Ramadan.",
-      ['Adapter mon emploi du temps aux cours', 'Garder au minimum Fajr, IA et sport', 'Faire tester mon prototype', 'Préparer Ramadan'],
-      ['m_tool5', 'm_biz4', 'm_ia4'], ['fajr', 'sleep', 'ai', 'sport'],
-      ["Mettre à jour mes tâches selon mon emploi du temps de cours", 'Faire tester mon prototype par 2 personnes', 'Choisir mes habitudes pour Ramadan'],
-      'Les cours intégrés à mon rythme et mes premiers retours.'),
-    C('2027-02', 'Ramadan', 'Maximiser mes bonnes actions',
-      "Faire de Ramadan le temps fort : plus de Coran, d'aumône, de dhikr et de prières de nuit, selon mes choix, en allégeant le reste.",
-      ['Choisir les bonnes actions que je veux ajouter', 'Passer mes tâches non essentielles en SHOULD DO', 'Garder ma régularité de base'],
-      [], ['fajr', 'quran', 'sadaqah', 'istighfar'],
-      ['Choisir mes habitudes de Ramadan', 'Passer les tâches non essentielles en SHOULD DO', 'Prévoir mon rythme de sommeil'],
-      'Un Ramadan centré sur Allah, avec mes bonnes actions maximisées à ma manière.'),
-    C('2027-03', 'Aboutissement', 'Tester et faire le bilan',
-      "Faire un test réel de mon activité, viser un premier client ou un premier revenu, puis faire le bilan de DON LEVELING.",
-      ['Obtenir mon premier client', 'Encaisser mon premier revenu', 'Faire le bilan des 7 mois', "Atteindre mon objectif d'épargne"],
-      ['m_biz5', 'm_biz6', 'm_tool6', 'm_sp6'], ['fajr', 'ai', 'sport', 'money'],
-      ['Refaire mes mesures de sport', 'Regarder mon radar de septembre à mars', 'Relire mes Wins', 'Écrire mon bilan dans la page Mar 31'],
-      'Mon bilan au 31 mars 2027.')
-  ];
-}
-function seedMar31() {
-  return [
-    { id: 's1', title: 'Allah en premier', items: ["Fajr à l'heure, chaque jour", "Le Coran, l'istighfar et l'aumône dans ma routine", 'Un Ramadan où j\'ai maximisé mes bonnes actions'] },
-    { id: 's2', title: 'Mon caractère', items: ['Discipline : je fais ce qui est prévu, même sans motivation', 'Je respecte mes engagements', 'Je maîtrise mes impulsions (téléphone, paroles, dépenses)'] },
-    { id: 's3', title: 'Ce que j\'aurai arrêté ou réduit', items: ['La procrastination', 'Dormir à 3h du matin : je me couche avant minuit', 'Les paroles inutiles'] },
-    { id: 's4', title: 'Mes compétences', items: ["L'IA appliquée et l'automatisation", 'La conversation en anglais', 'Les bases de la finance et de l\'investissement'] },
-    { id: 's5', title: "Ce que j'aurai construit", items: ["Un outil ou une application créée avec l'IA", 'Une activité qui génère des revenus'] },
-    { id: 's6', title: 'Mes résultats', items: ['3 000 000 FCFA épargnés', 'Un corps plus musclé, plus endurant, en meilleure forme', 'Un budget suivi chaque jour'] },
-    { id: 's7', title: 'Ma vie au 31 mars', items: ['Mon quotidien est organisé autour de mes habitudes, avec Allah en premier', 'Je concilie travail, cours du soir et objectifs sans perdre mes priorités'] }
-  ];
-}
 function seedMissing(s) {
-  if (!Array.isArray(s.goals)) s.goals = seedGoals();
-  if (!Array.isArray(s.chapters)) s.chapters = seedChapters();
-  if (!s.profile || typeof s.profile !== 'object') s.profile = { workStart: '', workHours: '', coursesStart: '', coursesDays: '', ramadanStart: '', note: '' };
-  if (!Array.isArray(s.wins)) s.wins = [];
-  if (!Array.isArray(s.mar31)) s.mar31 = seedMar31();
-  s.tasks.forEach(function (t) {
-    t.v.forEach(function (v) { if (v.dim === undefined) v.dim = defaultDim(t.id, v.pillar); });
-  });
-  s.version = 2;
+  /* réservé pour extensions ultérieures */
   return s;
 }
 
-/* ---------- objectifs : calculs ---------- */
-function goalById(id) {
-  for (var i = 0; i < S.goals.length; i++) if (S.goals[i].id === id) return S.goals[i];
-  return null;
-}
-function findMs(gid, mid) {
-  var g = goalById(gid);
-  if (!g) return null;
-  for (var i = 0; i < g.milestones.length; i++) if (g.milestones[i].id === mid) return g.milestones[i];
-  return null;
-}
-function streakDate(t, n) {
-  var key = 's|' + t.id + '|' + n;
-  if (key in memo) return memo[key];
-  var first = t.start > S.startedOn ? t.start : S.startedOn, last = lastDay(), td = todayStr(), run = 0, res = null;
-  if (t.end && t.end < last) last = t.end;
-  for (var d = first; d <= last; d = addDays(d, 1)) {
-    if (!plannedOn(t, d)) continue;
-    var s = stOf(d, t.id);
-    if (s === 'na') continue;
-    if (s === 'done') { run++; if (run >= n) { res = d; break; } }
-    else if (d !== td) run = 0;
+function loadState() {
+  try {
+    var raw = localStorage.getItem(KEY);
+    if (!raw) return fresh();
+    var parsed = JSON.parse(raw);
+    if (!validState(parsed)) return fresh();
+    return migrate(parsed);
+  } catch (e) {
+    storageOK = false;
+    return fresh();
   }
-  memo[key] = res;
-  return res;
 }
-function weeksDate(t, n) {
-  var key = 'w|' + t.id + '|' + n;
-  if (key in memo) return memo[key];
-  var td = todayStr(), first = t.start > S.startedOn ? t.start : S.startedOn, ws = weekStart(first), ok = 0, res = null;
-  if (ws < first) ws = addDays(ws, 7);
-  for (; addDays(ws, 6) < td && addDays(ws, 6) <= END; ws = addDays(ws, 7)) {
-    var we = addDays(ws, 6);
-    if (t.end && t.end < we) break;
-    var v = verOf(t, we);
-    if (v.f.t !== 'weekly') continue;
-    if (weekCount(t, ws) >= (v.f.q || 1)) { ok++; if (ok >= n) { res = we; break; } }
-  }
-  memo[key] = res;
-  return res;
-}
-function msDate(m) {
-  if (m.auto) {
-    var t = byId(m.auto.task);
-    if (!t) return null;
-    return m.auto.type === 'streak' ? streakDate(t, m.auto.n) : weeksDate(t, m.auto.n);
-  }
-  return m.doneOn || null;
-}
-function numCur(g, at) {
-  var cur = null;
-  (g.hist || []).forEach(function (h) { if (h.d <= at) cur = h; });
-  return cur;
-}
-function numProgress(g, at) {
-  if (g.start == null) return null;
-  var cur = numCur(g, at);
-  if (!cur) return null;
-  var den = g.target - g.start;
-  if (!den) return null;
-  return clamp01((cur.v - g.start) / den);
-}
-function goalCounts(g) {
-  var at = todayStr(), done = 0;
-  g.milestones.forEach(function (m) { var d = msDate(m); if (d && d <= at) done++; });
-  return { done: done, total: g.milestones.length };
-}
-function goalStatus(g) {
-  if (g.status && g.status !== 'auto') return g.status;
-  if (g.kind === 'num') {
-    var cur = numCur(g, '9999-12-31');
-    if (!cur || g.start == null) return 'not';
-    if (cur.v >= g.target) return 'done';
-    return cur.v !== g.start ? 'prog' : 'not';
-  }
-  var c = goalCounts(g);
-  if (c.total > 0 && c.done === c.total) return 'done';
-  return c.done > 0 ? 'prog' : 'not';
-}
-function goalBar(g) {
-  /* { txt, pct } pour l'affichage (l'objectif chiffré : valeur ÷ cible) */
-  if (g.kind === 'num') {
-    var cur = numCur(g, '9999-12-31');
-    if (!cur) return { txt: 'À renseigner / ' + fmtNum(g.target) + ' ' + esc(g.unit || ''), pct: 0 };
-    return { txt: fmtNum(cur.v) + ' / ' + fmtNum(g.target) + ' ' + esc(g.unit || ''), pct: Math.round(clamp01(cur.v / g.target) * 100) };
-  }
-  var c = goalCounts(g);
-  return { txt: c.done + ' / ' + c.total + ' milestones', pct: c.total ? Math.round(c.done / c.total * 100) : 0 };
-}
-function goalDoneDate(g) {
-  var best = null;
-  if (g.kind === 'num') {
-    (g.hist || []).forEach(function (h) { if (!best && h.v >= g.target) best = h.d; });
-  } else {
-    g.milestones.forEach(function (m) { var d = msDate(m); if (d && (!best || d > best)) best = d; });
-  }
-  return best || todayStr();
+function saveState() {
+  if (!storageOK) return;
+  try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {}
 }
 
-/* ---------- radar ---------- */
-function radarLast() { var t = todayStr(); return t > END ? END : addDays(t, -1); }
-function dimValue(dim, a, b) {
-  /* le radar ne compte que les jours terminés : la journée en cours n'est pas encore jugée */
-  var lo = a > S.startedOn ? a : S.startedOn, rl = radarLast(), hi = b < rl ? b : rl;
-  if (hi < lo) return null;
-  var at = b >= rl ? lastDay() : hi;
-  if (dn(hi) - dn(lo) + 1 < 7) return null;
-  var done = 0, total = 0, wd = {}, we = {}, comps = [];
-  for (var d = lo; d <= hi; d = addDays(d, 1)) {
-    for (var i = 0; i < S.tasks.length; i++) {
-      var t = S.tasks[i];
-      if (!activeOn(t, d)) continue;
-      var v = verOf(t, d);
-      if (v.dim !== dim) continue;
-      var s = stOf(d, t.id);
-      if (v.f.t === 'weekly') {
-        we[t.id] = (we[t.id] || 0) + (v.f.q || 1) / 7;
-        if (s === 'done') wd[t.id] = (wd[t.id] || 0) + 1;
-      } else if (plannedOn(t, d)) {
-        if (s === 'na') continue;
-        total++;
-        if (s === 'done') done++;
-      }
-    }
-  }
-  if (total > 0) comps.push(done / total);
-  var sd = 0, se = 0;
-  Object.keys(we).forEach(function (k) { sd += wd[k] || 0; se += we[k]; });
-  if (se > 0) comps.push(Math.min(1, sd / se));
-  if (dim !== 'deen' && dim !== 'character') {
-    var mt = 0, mdn = 0;
-    S.goals.forEach(function (g) {
-      if (g.cat !== dim) return;
-      if (g.kind === 'num') { var p = numProgress(g, at); if (p !== null) comps.push(p); }
-      else g.milestones.forEach(function (m) { mt++; var md = msDate(m); if (md && md <= at) mdn++; });
-    });
-    if (mt > 0) comps.push(mdn / mt);
-  }
-  if (!comps.length) return null;
-  var sum = 0;
-  comps.forEach(function (c) { sum += c; });
-  return Math.round(sum / comps.length * 100);
-}
-function valsFor(a, b) {
-  var o = {}, any = false;
-  DIMS.forEach(function (x) { var v = dimValue(x.id, a, b); o[x.id] = v; if (v !== null) any = true; });
-  return any ? o : null;
-}
-function monthKeys() {
-  var out = [], y = 2026, m = 9;
-  while (y < 2027 || (y === 2027 && m <= 3)) {
-    out.push(y + '-' + pad(m));
-    m++;
-    if (m > 12) { m = 1; y++; }
-  }
-  return out;
-}
-function monthEnd(key) {
-  var p = key.split('-');
-  return fromDn(Math.round(Date.UTC(+p[0], +p[1], 1) / 86400000) - 1);
-}
-function monthName(key) { return cap(MONTHS[+key.split('-')[1] - 1]); }
-function radarData() {
-  var last = radarLast(), r = { months: [] };
-  r.cur = valsFor(addDays(last, -27), last);
-  r.start = (dn(last) - dn(S.startedOn) >= 13) ? valsFor(S.startedOn, addDays(S.startedOn, 6)) : null;
-  monthKeys().forEach(function (k) {
-    if (k + '-01' > last) return;
-    r.months.push({ key: k, vals: valsFor(k + '-01', monthEnd(k)) });
-  });
-  return r;
-}
-function radarSVG(cur, cmp) {
-  var W = 340, H = 300, cx = 170, cy = 150, R = 92, LR = 113, n = DIMS.length;
-  function pt(i, val, rad) {
-    var a = i * 2 * Math.PI / n - Math.PI / 2, r = (rad === undefined ? R : rad) * (val === undefined ? 1 : val / 100);
-    return [cx + Math.cos(a) * r, cy + Math.sin(a) * r];
-  }
-  function poly(vals, target) {
-    return DIMS.map(function (x, i) { var p = pt(i, target ? RADAR_TARGET : (vals[x.id] || 0)); return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ');
-  }
-  var s = '<svg class="radar" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="DON LEVELING Radar">';
-  [25, 50, 75, 100].forEach(function (lv) { s += '<polygon class="r-grid" points="' + DIMS.map(function (x, i) { var p = pt(i, lv); return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join(' ') + '"/>'; });
-  DIMS.forEach(function (x, i) {
-    var e = pt(i, 100), l = pt(i, 100, LR), c = Math.cos(i * 2 * Math.PI / n - Math.PI / 2), sn = Math.sin(i * 2 * Math.PI / n - Math.PI / 2);
-    s += '<line class="r-axis" x1="' + cx + '" y1="' + cy + '" x2="' + e[0].toFixed(1) + '" y2="' + e[1].toFixed(1) + '"/>';
-    var anchor = c > 0.3 ? 'start' : (c < -0.3 ? 'end' : 'middle'), dy = sn > 0.3 ? 11 : (sn < -0.3 ? -4 : 4);
-    s += '<text class="r-lbl" x="' + l[0].toFixed(1) + '" y="' + (l[1] + dy).toFixed(1) + '" text-anchor="' + anchor + '">' + x.short + '</text>';
-  });
-  s += '<polygon class="r-target" points="' + poly({}, true) + '"/>';
-  if (cmp) s += '<polygon class="r-cmp" points="' + poly(cmp) + '"/>';
-  if (cur) {
-    s += '<polygon class="r-cur" points="' + poly(cur) + '"/>';
-    DIMS.forEach(function (x, i) { if (cur[x.id] !== null && cur[x.id] !== undefined) { var p = pt(i, cur[x.id]); s += '<circle class="r-dot" cx="' + p[0].toFixed(1) + '" cy="' + p[1].toFixed(1) + '" r="3.2"/>'; } });
-  }
-  return s + '</svg>';
-}
-function radarSection() {
-  var rd = radarData(), h = '<section class="card" id="radarCard"><div class="row between" style="align-items:flex-start;gap:10px"><h2 class="h">DON LEVELING RADAR</h2><button class="btn ghost sm" data-a="radar-how">Comment est-ce calculé ?</button></div>';
-  if (!rd.cur) {
-    h += '<p class="empty" style="margin-top:12px">Pas encore assez de données. Le radar apparaît après 7 jours de suivi, à partir de tes cases réellement cochées.</p>';
-  } else {
-    var cmpVals = null, cmpLabel = '';
-    if (radarCmp === 'start') { cmpVals = rd.start; cmpLabel = 'Départ'; }
-    else if (radarCmp !== 'none') { rd.months.forEach(function (m) { if (m.key === radarCmp) { cmpVals = m.vals; cmpLabel = monthName(m.key); } }); }
-    if (radarCmp !== 'none' && !cmpVals) radarCmp = 'none';
-    h += '<div class="radar-wrap">' + radarSVG(rd.cur, cmpVals) + '</div>';
-    h += '<div class="legend"><span><i class="lg cur"></i>Actuel (28 jours terminés)</span>' + (cmpVals ? '<span><i class="lg cmp"></i>' + esc(cmpLabel) + '</span>' : '') + '<span><i class="lg tgt"></i>Cible ' + RADAR_TARGET + '</span></div>';
-    h += '<div class="rchips" role="group" aria-label="Comparer avec">' +
-      '<button class="rchip' + (radarCmp === 'none' ? ' on' : '') + '" data-a="radar-cmp" data-v="none">Actuel seul</button>' +
-      '<button class="rchip' + (radarCmp === 'start' ? ' on' : '') + '" data-a="radar-cmp" data-v="start"' + (rd.start ? '' : ' disabled') + '>Départ</button>' +
-      monthKeys().map(function (k) {
-        var m = rd.months.filter(function (x) { return x.key === k; })[0], p = parts(k + '-01');
-        return '<button class="rchip' + (radarCmp === k ? ' on' : '') + '" data-a="radar-cmp" data-v="' + k + '"' + (m && m.vals ? '' : ' disabled') + '>' + MONTHS_U[p.m - 1] + '</button>';
-      }).join('') + '</div>';
-    h += '<div class="rlist">' + DIMS.map(function (x) {
-      var v = rd.cur[x.id], c = cmpVals ? cmpVals[x.id] : null, delta = '';
-      if (cmpVals && v !== null && c !== null) { var dd = v - c; delta = '<em class="' + (dd > 0 ? 'up' : dd < 0 ? 'dn' : '') + '">' + (dd > 0 ? '+' : '') + dd + '</em>'; }
-      return '<div class="rrow"><span>' + x.label + '</span><b>' + (v === null ? '<small>Pas encore assez de données</small>' : v) + '</b>' +
-        (cmpVals ? '<span class="rc">' + (c === null ? '—' : c) + '</span>' + delta : '') + '</div>';
-    }).join('') + '</div>';
-  }
-  h += '<p class="fine">Le radar est un outil de suivi : il mesure seulement la régularité et la progression des éléments que j\'ai choisi de suivre. Il ne mesure ni ma foi, ni la qualité de mes actes, ni ma valeur.</p></section>';
-  return h;
-}
-function radarHow() {
-  openModal('<h3 class="h">COMMENT EST CALCULÉ LE RADAR ?</h3><div class="how">' +
-    '<p>Chaque axe vaut de 0 à 100 et vient uniquement de tes données réelles. Rien n\'est estimé ni inventé.</p>' +
-    '<ul><li><b>Période :</b> Actuel = les 28 derniers jours terminés (sans la journée en cours). Départ = la première semaine de suivi. Un mois = ce mois-là. Il faut au moins 7 jours de suivi, sinon l\'axe affiche « Pas encore assez de données ».</li>' +
-    '<li><b>DEEN et CHARACTER :</b> cases cochées ÷ tâches prévues (les N/A sont exclus).</li>' +
-    '<li><b>SPORT :</b> séances faites ÷ séances attendues selon ton quota, puis moyenne avec tes milestones sport.</li>' +
-    '<li><b>COMPÉTENCES IA, LANGUE & LECTURE :</b> régularité des tâches liées, puis moyenne avec les milestones de la catégorie.</li>' +
-    '<li><b>BUSINESS :</b> milestones atteintes ÷ milestones prévues.</li>' +
-    '<li><b>FINANCES :</b> régularité des dépenses notées, milestones, et progression de l\'épargne depuis ton point de départ dès que tu as renseigné une valeur.</li>' +
-    '<li><b>Moyenne :</b> chaque axe est la moyenne des éléments disponibles.</li>' +
-    '<li><b>Cible :</b> la ligne pointillée est à ' + RADAR_TARGET + ' (une régularité élevée mais réaliste).</li></ul>' +
-    '<p>Le radar mesure la régularité et la progression des éléments que tu as choisi de suivre. Il ne mesure ni ta foi, ni la qualité de tes actes.</p></div>' +
-    '<div class="btns"><button class="btn ghost block" data-a="modal-close">Fermer</button></div>');
-}
-
-/* ---------- gabarits : objectifs ---------- */
-function statusBadge(g) { var s = goalStatus(g); return '<span class="st st-' + s + '">' + STATUS[s] + '</span>'; }
-function missionCard(g, compact) {
-  var b = goalBar(g);
-  return '<button class="mission" data-a="go" data-v="' + g.cat + '"><span class="m-top"><span class="m-name">' + esc(g.name) + '</span>' + statusBadge(g) + '</span>' +
-    '<span class="m-txt">' + b.txt + '</span><span class="hbar"><i style="width:' + b.pct + '%"></i></span></button>';
-}
-function missionsCard() {
-  var bigs = S.goals.filter(function (g) { return g.big; });
-  return '<section class="card b-missions"><h2 class="h2">BIG MISSIONS</h2>' +
-    (bigs.length ? '<div class="missions">' + bigs.map(missionCard).join('') + '</div>' : '<p class="empty">Aucune Big Mission. Ajoute-en une dans Réglages.</p>') + '</section>';
-}
-function chapterIndex(d) {
-  var k = d.slice(0, 7), keys = S.chapters.map(function (c) { return c.key; }), i = keys.indexOf(k);
-  if (i >= 0) return i;
-  return d < START ? 0 : S.chapters.length - 1;
-}
-function chapterCard() {
-  var i = chapterIndex(todayStr()), c = S.chapters[i], p = parts(c.key + '-01');
-  return '<section class="card b-chapter"><h2 class="h2">CHAPITRE ACTUEL</h2>' +
-    '<div class="chap-t">Chapitre ' + (i + 1) + ' — ' + cap(MONTHS[p.m - 1]) + '</div><div class="chap-n">' + esc(c.name) + '</div>' +
-    '<p class="chap-i">' + esc(c.intention) + '</p><div class="btns"><button class="btn ghost sm" data-a="chap-open" data-k="' + c.key + '">Voir le chapitre</button></div></section>';
-}
-function radarCard() {
-  var last = radarLast(), cur = valsFor(addDays(last, -27), last);
-  return '<section class="card b-radar"><h2 class="h2">DON LEVELING RADAR</h2>' +
-    (cur ? '<div class="radar-wrap sm">' + radarSVG(cur, null) + '</div>' : '<p class="empty">Pas encore assez de données. Le radar apparaît après 7 jours de suivi.</p>') +
-    '<div class="btns"><button class="btn ghost sm" data-a="go" data-v="progress">Voir le radar en détail</button></div>' +
-    '<p class="fine">Suivi de régularité, jamais une note de ma foi.</p></section>';
-}
-
-function msRow(g, m) {
-  var d = msDate(m), done = !!d && d <= todayStr();
-  return '<div class="ms' + (done ? ' done' : '') + '" data-g="' + g.id + '" data-m="' + m.id + '">' +
-    '<button class="ms-main" data-a="' + (m.auto ? 'ms-auto' : 'ms-toggle') + '" role="checkbox" aria-checked="' + done + '"><span class="box">' + (done ? IC.check : '') + '</span>' +
-    '<span class="t-body"><span class="t-name">' + esc(m.name) + '</span>' +
-    '<span class="t-meta">' + (m.auto ? '<span class="tag">AUTOMATIQUE</span>' : '') + (done ? '<span>' + fmtDM(d) + '</span>' : '') + '</span></span></button>' +
-    '<button class="more" data-a="ms-edit" aria-label="Modifier la milestone">' + IC.dots + '</button></div>';
-}
-function goalCard(g) {
-  var b = goalBar(g), h = '<article class="goal"><div class="ghead"><div class="gtitle"><div class="gname">' + esc(g.name) + '</div>' +
-    (g.big ? '<span class="tag ok">BIG MISSION</span>' : '') + '</div>' + statusBadge(g) + '</div>';
-  var startTxt = g.startText || (g.kind === 'num' && g.start != null ? fmtNum(g.start) + ' ' + esc(g.unit || '') : '');
-  h += '<div class="gsub"><span><b>Départ :</b> ' + (startTxt ? esc(startTxt) : '<i>à renseigner</i>') + '</span><span><b>Cible :</b> ' + (g.targetText ? esc(g.targetText) : (g.kind === 'num' ? fmtNum(g.target) + ' ' + esc(g.unit || '') : '<i>à renseigner</i>')) + '</span></div>';
-  h += '<div class="gbar"><span>' + b.txt + '</span><span class="hbar"><i style="width:' + b.pct + '%"></i></span></div>';
-  if (g.kind === 'num') {
-    var hist = (g.hist || []).slice(-3).reverse();
-    h += (hist.length ? '<div class="ghist">' + hist.map(function (x) { return '<span>' + fmtDM(x.d) + ' : ' + fmtNum(x.v) + ' ' + esc(g.unit || '') + '</span>'; }).join('') + '</div>' : '') +
-      '<div class="btns"><button class="btn sm" data-a="goal-value" data-g="' + g.id + '">Mettre à jour la valeur</button><button class="btn ghost sm" data-a="goal-edit" data-g="' + g.id + '">Modifier</button></div>';
-  } else {
-    h += '<div class="ms-list">' + g.milestones.map(function (m) { return msRow(g, m); }).join('') + '</div>' +
-      '<div class="btns"><button class="btn ghost sm" data-a="ms-add" data-g="' + g.id + '">Ajouter une milestone</button><button class="btn ghost sm" data-a="goal-edit" data-g="' + g.id + '">Modifier</button></div>';
-  }
-  return h + '</article>';
-}
-function linkedHabits(cat) {
-  var last = lastDay(), ms = last.slice(0, 7) + '-01';
-  var list = sortedFor(S.tasks.filter(function (t) { return !t.end && t.v[t.v.length - 1].dim === cat; }), last);
-  if (!list.length) return '<p class="empty">Aucune habitude liée à cette catégorie.</p>';
-  return list.map(function (t) {
-    var v = t.v[t.v.length - 1], txt, p = 0;
-    if (v.f.t === 'weekly') {
-      var n = weekCount(t, last), w = weeksStats(t);
-      txt = n + ' / ' + v.f.q + ' cette semaine' + (w.total ? ' — semaines réussies : ' + w.ok + ' / ' + w.total : '');
-      p = Math.round(clamp01(n / v.f.q) * 100);
-    } else {
-      var r = rangeStats(ms, last, t.id), sk = streaks(t);
-      txt = r.done + ' / ' + r.total + ' jours ce mois-ci — série ' + sk.cur;
-      p = r.total ? Math.round(r.done / r.total * 100) : 0;
-    }
-    return '<div class="lh"><div class="lh-n">' + esc(v.name) + '</div><div class="lh-t">' + txt + '</div><span class="hbar"><i style="width:' + p + '%"></i></span></div>';
-  }).join('');
-}
-function catHTML(cat) {
-  var last = radarLast(), rv = dimValue(cat, addDays(last, -27), last);
-  var goals = S.goals.filter(function (g) { return g.cat === cat; });
-  var h = '<section class="card"><div class="row between" style="align-items:flex-start;gap:10px"><div><h2 class="h">' + CAT_TITLE[cat].toUpperCase() + '</h2><p class="kv" style="margin-top:6px">Radar (28 jours) : <b>' + (rv === null ? 'pas encore assez de données' : rv) + '</b></p></div>' +
-    '<button class="btn sm" data-a="update">+ UPDATE</button></div></section>';
-  h += goals.map(function (g) { return '<section class="card">' + goalCard(g) + '</section>'; }).join('');
-  if (!goals.length) h += '<section class="card"><p class="empty">Aucun objectif dans cette catégorie.</p></section>';
-  h += '<div class="btns" style="margin:-2px 0 14px"><button class="btn ghost sm" data-a="goal-add" data-c="' + cat + '">Ajouter un objectif</button></div>';
-  h += '<section class="card"><h2 class="h2">HABITUDES ET TÂCHES LIÉES</h2><div style="margin-top:8px">' + linkedHabits(cat) + '</div></section>';
-  return h;
-}
-function goalsHTML() {
-  var bigs = S.goals.filter(function (g) { return g.big; });
-  var h = '<section class="card"><h2 class="h">BIG MISSIONS</h2><div class="missions" style="margin-top:12px">' + bigs.map(missionCard).join('') + '</div></section>';
-  h += '<section class="card"><h2 class="h">MES CATÉGORIES</h2><div style="margin-top:8px">' + CATS.map(function (c) {
-    var gs = S.goals.filter(function (g) { return g.cat === c; });
-    return '<button class="catrow" data-a="go" data-v="' + c + '"><span class="ci">' + IC[CAT_IC[c]] + '</span><span class="cn">' + CAT_TITLE[c] + '<small>' + pl(gs.length, 'objectif', 'objectifs') + '</small></span><span class="ca">' + IC.right + '</span></button>';
-  }).join('') + '</div></section>';
-  return h;
-}
-
-/* ---------- chapitres ---------- */
-function chapterBody(c, i) {
-  var last = lastDay(), p = parts(c.key + '-01'), a = c.key + '-01', b = monthEnd(c.key), pr = S.profile;
-  var h = '<div class="chap-body"><p class="chap-th"><b>Thème :</b> ' + esc(c.theme) + '</p><p class="chap-i">' + esc(c.intention) + '</p>';
-  if (c.key === '2026-09' && (pr.workStart || pr.workHours)) h += '<p class="kv">Début du travail : <b>' + (pr.workStart ? fmtDM(pr.workStart) : '—') + '</b>' + (pr.workHours ? ' — ' + esc(pr.workHours) : '') + '</p>';
-  if (c.key === '2027-01' && (pr.coursesStart || pr.coursesDays)) h += '<p class="kv">Reprise des cours : <b>' + (pr.coursesStart ? fmtDM(pr.coursesStart) : '—') + '</b>' + (pr.coursesDays ? ' — ' + esc(pr.coursesDays) : '') + '</p>';
-  if (c.key === '2027-02') h += '<p class="kv">Début de Ramadan : <b>' + (pr.ramadanStart ? fmtDM(pr.ramadanStart) : 'vers le 8 février (à confirmer)') + '</b></p>';
-  h += '<h4 class="sh">Objectifs du mois</h4><ul class="bul">' + c.objectives.map(function (o) { return '<li>' + esc(o) + '</li>'; }).join('') + '</ul>';
-  var msl = c.ms.map(function (id) {
-    for (var gi = 0; gi < S.goals.length; gi++) { var m = findMs(S.goals[gi].id, id); if (m) return { g: S.goals[gi], m: m }; }
-    return null;
-  }).filter(Boolean);
-  h += '<h4 class="sh">Milestones</h4>' + (msl.length ? '<div class="ms-list">' + msl.map(function (x) { return msRow(x.g, x.m); }).join('') + '</div>' : '<p class="empty">Aucune milestone : ce chapitre est consacré à mes bonnes actions.</p>');
-  var hs = c.habits.map(function (id) { return byId(id); }).filter(Boolean);
-  if (hs.length) {
-    h += '<h4 class="sh">Habitudes prioritaires</h4>' + hs.map(function (t) {
-      var v = t.v[t.v.length - 1], txt;
-      if (v.f.t === 'weekly') txt = 'Quota : ' + v.f.q + ' par semaine';
-      else { var r = rangeStats(a, b < last ? b : last, t.id); txt = a > last ? 'Pas encore commencé' : r.done + ' / ' + r.total + ' ce mois-ci'; }
-      return '<div class="lowrow"><span>' + esc(v.name) + '</span><b>' + txt + '</b></div>';
-    }).join('');
-  }
-  h += '<h4 class="sh">Checklist du chapitre</h4><div>' + c.checklist.map(function (k) {
-    return '<button class="ck' + (k.done ? ' done' : '') + '" data-a="ck-toggle" data-k="' + c.key + '" data-i="' + k.id + '" role="checkbox" aria-checked="' + k.done + '"><span class="box">' + (k.done ? IC.check : '') + '</span><span>' + esc(k.t) + '</span></button>';
-  }).join('') + '</div>';
-  h += '<h4 class="sh">Résultat attendu à la fin du mois</h4><p class="chap-i">' + esc(c.result) + '</p>';
-  h += '<div class="btns"><button class="btn ghost sm" data-a="chap-edit" data-k="' + c.key + '">Modifier ce chapitre</button>' + (c.key === '2027-02' ? '<button class="btn ghost sm" data-a="go" data-v="settings">Ajuster mes tâches</button>' : '') + '</div></div>';
-  void p; void i;
-  return h;
-}
-function chaptersHTML() {
-  var cur = chapterIndex(todayStr()), open = chapOpen || S.chapters[cur].key;
-  var h = '<section class="card"><h2 class="h">CHAPITRES</h2><p class="fine" style="margin-top:8px">Sept mois pour devenir ma version du 31 mars. Chaque chapitre me rapproche de cette version.</p></section>';
-  S.chapters.forEach(function (c, i) {
-    var p = parts(c.key + '-01'), isOpen = c.key === open, isCur = i === cur, doneCk = c.checklist.filter(function (k) { return k.done; }).length;
-    h += '<section class="card chap' + (isCur ? ' now' : '') + '"><button class="chap-h" data-a="chap-toggle" data-k="' + c.key + '" aria-expanded="' + isOpen + '"><span class="chap-hl"><span class="chap-num">Chapitre ' + (i + 1) + ' — ' + cap(MONTHS[p.m - 1]) + '</span><span class="chap-nm">' + esc(c.name) + '</span></span>' +
-      '<span class="chap-hr">' + (isCur ? '<span class="tag ok">EN COURS</span>' : '') + '<span class="muted" style="font-size:12px">' + doneCk + ' / ' + c.checklist.length + '</span></span></button>' + (isOpen ? chapterBody(c, i) : '') + '</section>';
-  });
-  return h;
-}
-
-/* ---------- Wins ---------- */
-function allWins() {
-  var arr = S.wins.map(function (w) { return { id: w.id, d: w.d, t: w.t, manual: true }; });
-  S.goals.forEach(function (g) {
-    g.milestones.forEach(function (m) { var d = msDate(m); if (d && d <= todayStr()) arr.push({ d: d, t: m.name, sub: 'Milestone débloquée — ' + g.name }); });
-    if (goalStatus(g) === 'done') arr.push({ d: goalDoneDate(g), t: 'Objectif atteint : ' + g.name, sub: 'Objectif terminé', big: true });
-  });
-  arr.sort(function (a, b) { return a.d < b.d ? 1 : a.d > b.d ? -1 : 0; });
-  return arr;
-}
-function winsHTML() {
-  var td = lastDay(), wins = allWins();
-  var h = '<section class="card"><h2 class="h">WINS</h2><p class="fine" style="margin-top:8px">La trace de tout ce que j\'accomplis pendant DON LEVELING. Les milestones débloquées s\'ajoutent toutes seules.</p>' +
-    '<label class="lbl" for="winText">Ajouter une victoire</label><input class="inp" id="winText" maxlength="160" placeholder="Ex. Première semaine complète à 4 séances">' +
-    '<div class="btns"><button class="btn" data-a="win-add">Ajouter aux Wins</button></div></section>';
-  h += '<section class="card"><h2 class="h2">MES VICTOIRES (' + wins.length + ')</h2>';
-  if (!wins.length) h += '<p class="empty">Pas encore de victoire enregistrée. La première arrivera vite : ajoute-la ici, même petite.</p>';
-  else h += '<div style="margin-top:6px">' + wins.map(function (w) {
-    return '<div class="win' + (w.big ? ' big' : '') + '"><div class="win-d">' + fmtShort(w.d) + '</div><div class="win-t"><div>' + esc(w.t) + '</div>' + (w.sub ? '<small>' + esc(w.sub) + '</small>' : '') + '</div>' +
-      (w.manual ? '<button class="more" data-a="win-del" data-id="' + w.id + '" aria-label="Supprimer cette victoire">×</button>' : '') + '</div>';
-  }).join('') + '</div>';
-  void td;
-  return h + '</section>';
-}
-
-/* ---------- Mar 31 ---------- */
-function mar31HTML() {
-  var ti = timeInfo(todayStr()), h = '<section class="card m31"><div class="m31-d">31 MARS 2027</div><h2 class="h" style="margin-top:6px">MA VERSION DU 31 MARS</h2>' +
-    '<p class="chap-i" style="margin-top:10px">La personne que je veux devenir à la fin de DON LEVELING, avec Allah en premier.</p>' +
-    '<div class="m31-c">' + (ti.phase === 'during' ? '<b>' + pl(ti.left + 1, 'jour', 'jours') + '</b> avant cette date' : (ti.phase === 'before' ? 'Le chemin commence bientôt' : 'DON LEVELING est terminé')) + '</div></section>';
-  S.mar31.forEach(function (s) {
-    h += '<section class="card sm"><h2 class="h2">' + esc(s.title).toUpperCase() + '</h2><ul class="bul" style="margin-top:8px">' + s.items.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ul></section>';
-  });
-  h += '<section class="card"><h2 class="h2">OÙ J\'EN SUIS AUJOURD\'HUI</h2><div class="missions" style="margin-top:8px">' + S.goals.filter(function (g) { return g.big; }).map(missionCard).join('') + '</div></section>';
-  h += '<div class="btns"><button class="btn ghost" data-a="m31-edit">Modifier ma version du 31 mars</button></div>';
-  return h;
-}
-
-/* ---------- Réglages : infos perso + objectifs ---------- */
-function profileCard() {
-  var p = S.profile, rows = [
-    ['Début du travail', p.workStart ? fmtDM(p.workStart) + ' ' + p.workStart.slice(0, 4) : ''],
-    ['Horaires de travail', p.workHours],
-    ['Reprise des cours', p.coursesStart ? fmtDM(p.coursesStart) + ' ' + p.coursesStart.slice(0, 4) : ''],
-    ['Jours et horaires de cours', p.coursesDays],
-    ['Début de Ramadan', p.ramadanStart ? fmtDM(p.ramadanStart) + ' ' + p.ramadanStart.slice(0, 4) : 'vers le 8 février (à confirmer)'],
-    ['Note importante', p.note]
-  ];
-  return '<section class="card"><h2 class="h">INFORMATIONS PERSONNELLES</h2><div style="margin-top:8px">' + rows.map(function (r) {
-    return '<div class="lowrow"><span>' + r[0] + '</span><b style="text-align:right;font-weight:600;color:' + (r[1] ? 'var(--ink)' : 'var(--muted)') + '">' + (r[1] ? esc(r[1]) : 'à renseigner') + '</b></div>';
-  }).join('') + '</div><div class="btns"><button class="btn ghost sm" data-a="info-edit">Modifier</button></div></section>';
-}
-function goalsSettingsCard() {
-  return '<section class="card"><h2 class="h">MES OBJECTIFS</h2><div style="margin-top:8px">' + S.goals.map(function (g) {
-    return '<div class="srow"><div><div class="sname">' + esc(g.name) + '</div><div class="stags"><span class="tag">' + CAT_TITLE[g.cat].toUpperCase() + '</span>' + (g.big ? '<span class="tag ok">BIG MISSION</span>' : '') + '<span class="tag">' + STATUS[goalStatus(g)].toUpperCase() + '</span></div></div>' +
-      '<button class="btn ghost sm" data-a="goal-edit" data-g="' + g.id + '">Modifier</button></div>';
-  }).join('') + '</div><div class="btns"><button class="btn" data-a="goal-add" data-c="ia">Ajouter un objectif</button></div></section>';
-}
-
-/* ---------- fenêtres : + UPDATE ---------- */
-function goalOptions(list, sel) {
-  return list.map(function (g) { return '<option value="' + g.id + '"' + (g.id === sel ? ' selected' : '') + '>' + esc(g.name) + '</option>'; }).join('');
-}
-function openUpdate(step, gid) { up = { step: step || 'menu', goalId: gid || null }; renderUpdate(); }
-function renderUpdate() {
-  var h = '', td = lastDay();
-  if (up.step === 'menu') {
-    h = '<h3 class="h">+ UPDATE</h3><p class="kv" style="margin-top:0">Que veux-tu mettre à jour ?</p><div class="upmenu">' +
-      '<button data-a="up-step" data-v="value"><b>La valeur d\'un objectif</b><small>Ex. mon épargne actuelle</small></button>' +
-      '<button data-a="up-step" data-v="status"><b>Le statut d\'un objectif</b><small>Pas commencé, en cours, terminé</small></button>' +
-      '<button data-a="up-step" data-v="ms"><b>Une milestone</b><small>La cocher ou en ajouter une</small></button>' +
-      '<button data-a="up-step" data-v="habit"><b>Une habitude</b><small>Ajouter, renommer, changer la fréquence</small></button>' +
-      '<button data-a="up-step" data-v="win"><b>Une victoire</b><small>L\'ajouter à mes Wins</small></button>' +
-      '<button data-a="up-step" data-v="info"><b>Une information importante</b><small>Travail, cours, Ramadan, note</small></button></div>' +
-      '<div class="btns"><button class="btn ghost block" data-a="modal-close">Fermer</button></div>';
-  } else if (up.step === 'value') {
-    var ng = S.goals.filter(function (g) { return g.kind === 'num'; });
-    if (!ng.length) h = '<h3 class="h">VALEUR D\'UN OBJECTIF</h3><p class="empty">Aucun objectif chiffré. Crée-en un dans Réglages.</p>';
-    else {
-      var g = goalById(up.goalId) && goalById(up.goalId).kind === 'num' ? goalById(up.goalId) : ng[0];
-      up.goalId = g.id;
-      var cur = numCur(g, '9999-12-31');
-      h = '<h3 class="h">VALEUR D\'UN OBJECTIF</h3><label class="lbl" for="upGoal">Objectif</label><select class="inp" id="upGoal">' + goalOptions(ng, g.id) + '</select>' +
-        '<p class="kv">Valeur actuelle : <b>' + (cur ? fmtNum(cur.v) + ' ' + esc(g.unit || '') + ' (le ' + fmtDM(cur.d) + ')' : 'pas encore renseignée') + '</b><br>Cible : <b>' + fmtNum(g.target) + ' ' + esc(g.unit || '') + '</b></p>' +
-        '<label class="lbl" for="upVal">Nouvelle valeur (' + esc(g.unit || '') + ')</label><input class="inp" id="upVal" inputmode="decimal" placeholder="Ex. 450000">' +
-        '<label class="lbl" for="upDate">Date</label><input class="inp" id="upDate" type="date" min="' + START + '" max="' + td + '" value="' + td + '">' +
-        (g.start == null ? '<p class="fine">La première valeur que tu renseignes devient ton point de départ.</p>' : '') +
-        '<div class="btns"><button class="btn" data-a="up-save-value">Enregistrer</button>';
-    }
-    h += (ng.length ? '' : '<div class="btns">') + '<button class="btn ghost" data-a="up-back">Retour</button></div>';
-  } else if (up.step === 'status') {
-    var g2 = goalById(up.goalId) || S.goals[0];
-    up.goalId = g2 ? g2.id : null;
-    if (!g2) h = '<h3 class="h">STATUT</h3><p class="empty">Aucun objectif.</p><div class="btns"><button class="btn ghost" data-a="up-back">Retour</button></div>';
-    else h = '<h3 class="h">STATUT D\'UN OBJECTIF</h3><label class="lbl" for="upGoal">Objectif</label><select class="inp" id="upGoal">' + goalOptions(S.goals, g2.id) + '</select>' +
-      '<p class="kv">Statut actuel : <b>' + STATUS[goalStatus(g2)] + '</b>' + (g2.status && g2.status !== 'auto' ? ' (choisi à la main)' : ' (calculé automatiquement)') + '</p><span class="lbl">Choisir un statut</span>' +
-      '<div class="seg">' + [['auto', 'Automatique'], ['not', STATUS.not], ['prog', STATUS.prog], ['done', STATUS.done]].map(function (o) {
-        return '<button class="' + ((g2.status || 'auto') === o[0] ? 'on' : '') + '" data-a="up-status" data-v="' + o[0] + '">' + o[1] + '</button>';
-      }).join('') + '</div><div class="btns"><button class="btn ghost" data-a="up-back">Retour</button></div>';
-  } else if (up.step === 'ms') {
-    var msg = S.goals.filter(function (g) { return g.kind !== 'num'; });
-    var g3 = goalById(up.goalId) && goalById(up.goalId).kind !== 'num' ? goalById(up.goalId) : msg[0];
-    up.goalId = g3 ? g3.id : null;
-    if (!g3) h = '<h3 class="h">MILESTONES</h3><p class="empty">Aucun objectif à milestones.</p><div class="btns"><button class="btn ghost" data-a="up-back">Retour</button></div>';
-    else h = '<h3 class="h">MILESTONES</h3><label class="lbl" for="upGoal">Objectif</label><select class="inp" id="upGoal">' + goalOptions(msg, g3.id) + '</select>' +
-      '<div class="ms-list" style="margin-top:10px">' + g3.milestones.map(function (m) { return msRow(g3, m).replace('data-a="ms-toggle"', 'data-a="up-ms-toggle"'); }).join('') + '</div>' +
-      '<label class="lbl" for="upMs">Ajouter une milestone</label><div class="row" style="gap:8px"><input class="inp" id="upMs" maxlength="120" placeholder="Nouvelle milestone"><button class="btn sm" data-a="up-ms-add">Ajouter</button></div>' +
-      '<div class="btns"><button class="btn ghost" data-a="up-back">Retour</button></div>';
-  } else if (up.step === 'habit') {
-    h = '<h3 class="h">HABITUDES ET TÂCHES</h3><p class="fine" style="margin-top:0">Les changements s\'appliquent à partir d\'aujourd\'hui.</p><div class="btns"><button class="btn" data-a="add">Ajouter une habitude</button></div><div style="margin-top:10px">' +
-      sortedFor(S.tasks.filter(function (t) { return !t.end; }), effDate()).map(function (t) {
-        return '<div class="srow"><div class="sname">' + esc(verOf(t, effDate()).name) + '</div><button class="btn ghost sm" data-a="edit" data-id="' + t.id + '">Modifier</button></div>';
-      }).join('') + '</div><div class="btns"><button class="btn ghost" data-a="up-back">Retour</button></div>';
-  } else if (up.step === 'win') {
-    h = '<h3 class="h">NOUVELLE VICTOIRE</h3><label class="lbl" for="upWin">Ma victoire</label><input class="inp" id="upWin" maxlength="160" placeholder="Ex. J\'ai automatisé ma première tâche">' +
-      '<label class="lbl" for="upWinDate">Date</label><input class="inp" id="upWinDate" type="date" min="' + START + '" max="' + td + '" value="' + td + '">' +
-      '<div class="btns"><button class="btn" data-a="up-save-win">Ajouter aux Wins</button><button class="btn ghost" data-a="up-back">Retour</button></div>';
-  } else if (up.step === 'info') {
-    var p = S.profile;
-    h = '<h3 class="h">INFORMATIONS IMPORTANTES</h3>' +
-      '<label class="lbl" for="pfWs">Début du travail</label><input class="inp" id="pfWs" type="date" value="' + esc(p.workStart) + '">' +
-      '<label class="lbl" for="pfWh">Horaires de travail</label><input class="inp" id="pfWh" maxlength="80" value="' + esc(p.workHours) + '" placeholder="Ex. 8h - 17h, du lundi au vendredi">' +
-      '<label class="lbl" for="pfCs">Reprise des cours</label><input class="inp" id="pfCs" type="date" value="' + esc(p.coursesStart) + '">' +
-      '<label class="lbl" for="pfCd">Jours et horaires de cours</label><input class="inp" id="pfCd" maxlength="80" value="' + esc(p.coursesDays) + '" placeholder="Ex. 18h - 21h, lundi au jeudi">' +
-      '<label class="lbl" for="pfRm">Début de Ramadan (quand il sera confirmé)</label><input class="inp" id="pfRm" type="date" value="' + esc(p.ramadanStart) + '">' +
-      '<label class="lbl" for="pfNote">Note importante</label><textarea class="txt" id="pfNote" maxlength="500" style="font-family:inherit;font-size:16px;min-height:80px">' + esc(p.note) + '</textarea>' +
-      '<div class="btns"><button class="btn" data-a="up-save-info">Enregistrer</button><button class="btn ghost" data-a="' + (up.from === 'settings' ? 'modal-close' : 'up-back') + '">' + (up.from === 'settings' ? 'Annuler' : 'Retour') + '</button></div>';
-  }
-  openModal(h);
-}
-function saveValue() {
-  var g = goalById(up.goalId), v = num(($('#upVal') || {}).value), d = ($('#upDate') || {}).value || lastDay();
-  if (!g) return;
-  if (v === null || v < 0) { toast('Entre une valeur valide.'); return; }
-  if (!RE_DATE.test(d) || d < START || d > lastDay()) d = lastDay();
-  g.hist = (g.hist || []).filter(function (h) { return h.d !== d; });
-  g.hist.push({ d: d, v: v });
-  g.hist.sort(function (a, b) { return a.d < b.d ? -1 : a.d > b.d ? 1 : 0; });
-  if (g.start == null) g.start = g.hist[0].v;
-  save();
-  closeModal();
-  render();
-  toast('Valeur enregistrée : ' + fmtNum(v) + ' ' + (g.unit || ''));
-}
-function toggleMs(gid, mid) {
-  var m = findMs(gid, mid);
-  if (!m || m.auto) return;
-  m.doneOn = m.doneOn ? null : lastDay();
-  save();
-  memo = {};
-}
-function saveInfo() {
-  var p = S.profile;
-  p.workStart = ($('#pfWs') || {}).value || '';
-  p.workHours = (($('#pfWh') || {}).value || '').trim();
-  p.coursesStart = ($('#pfCs') || {}).value || '';
-  p.coursesDays = (($('#pfCd') || {}).value || '').trim();
-  p.ramadanStart = ($('#pfRm') || {}).value || '';
-  p.note = (($('#pfNote') || {}).value || '').trim();
-  save();
-  closeModal();
-  render();
-  toast('Informations enregistrées');
-}
-function addWin(text, d) {
-  text = (text || '').trim();
-  if (!text) { toast('Écris ta victoire.'); return false; }
-  if (!RE_DATE.test(d || '') || d > lastDay()) d = lastDay();
-  S.wins.push({ id: uid('w'), d: d, t: text.slice(0, 160) });
-  save();
-  return true;
-}
-
-/* ---------- éditeurs : objectif, milestone, chapitre, Mar 31 ---------- */
-function openMsEditor(gid, mid) {
-  var m = mid ? findMs(gid, mid) : null;
-  mEd = { g: gid, m: mid || null, name: m ? m.name : '' };
-  openModal('<h3 class="h">' + (m ? 'MODIFIER LA MILESTONE' : 'NOUVELLE MILESTONE') + '</h3><label class="lbl" for="msName">Nom</label><input class="inp" id="msName" maxlength="120" value="' + esc(mEd.name) + '">' +
-    '<div class="btns" style="margin-top:18px"><button class="btn" data-a="ms-save">Enregistrer</button><button class="btn ghost" data-a="modal-close">Annuler</button>' + (m ? '<button class="btn danger" data-a="ms-del">Supprimer</button>' : '') + '</div>');
-}
-function saveMs() {
-  var name = (($('#msName') || {}).value || '').trim();
-  if (!name) { toast('Donne un nom à la milestone.'); return; }
-  var g = goalById(mEd.g);
-  if (!g) return;
-  if (mEd.m) { var m = findMs(mEd.g, mEd.m); if (m) m.name = name; }
-  else g.milestones.push(M(uid('m'), name));
-  memo = {};
-  save();
-  var keep = up, back = !!(up && up.step === 'ms');
-  closeModal();
-  if (back) { up = keep; renderUpdate(); }
-  render();
-}
-function delMs() {
-  var g = goalById(mEd.g);
-  if (!g) return;
-  var gid = mEd.g, mid = mEd.m;
-  confirmBox('Supprimer cette milestone ?', 'Elle disparaît de l\'objectif et de ses statistiques.', 'Supprimer', true, function () {
-    var gg = goalById(gid);
-    if (gg) gg.milestones = gg.milestones.filter(function (m) { return m.id !== mid; });
-    S.chapters.forEach(function (c) { c.ms = c.ms.filter(function (x) { return x !== mid; }); });
-    memo = {};
-    save();
-    closeModal();
-    render();
-  });
-}
-function openGoalEditor(gid, cat) {
-  var g = gid ? goalById(gid) : null;
-  gEd = g ? { id: g.id, name: g.name, cat: g.cat, big: !!g.big, kind: g.kind, unit: g.unit || 'FCFA', target: g.target != null ? String(g.target) : '', start: g.start != null ? String(g.start) : '', startText: g.startText || '', targetText: g.targetText || '', status: g.status || 'auto' }
-    : { id: null, name: '', cat: cat || 'ia', big: false, kind: 'ms', unit: '', target: '', start: '', startText: '', targetText: '', status: 'auto' };
-  renderGoalEditor();
-}
-function syncGoalEd() {
-  if (!gEd) return;
-  ['name', 'unit', 'target', 'start', 'startText', 'targetText'].forEach(function (k) {
-    var el = $('#ge_' + k);
-    if (el) gEd[k] = el.value;
-  });
-}
-function renderGoalEditor() {
-  var e = gEd;
-  var h = '<h3 class="h">' + (e.id ? 'MODIFIER L\'OBJECTIF' : 'NOUVEL OBJECTIF') + '</h3>' +
-    '<label class="lbl" for="ge_name">Nom</label><input class="inp" id="ge_name" maxlength="100" value="' + esc(e.name) + '">' +
-    '<span class="lbl">Catégorie</span><div class="seg">' + CATS.map(function (c) { return '<button class="' + (e.cat === c ? 'on' : '') + '" data-a="ge-cat" data-v="' + c + '">' + CAT_TITLE[c] + '</button>'; }).join('') + '</div>' +
-    '<span class="lbl">Big Mission (affichée sur l\'Accueil)</span><div class="seg"><button class="' + (e.big ? 'on' : '') + '" data-a="ge-big" data-v="1">Oui</button><button class="' + (!e.big ? 'on' : '') + '" data-a="ge-big" data-v="0">Non</button></div>';
-  if (!e.id) h += '<span class="lbl">Type de suivi</span><div class="seg"><button class="' + (e.kind === 'ms' ? 'on' : '') + '" data-a="ge-kind" data-v="ms">Milestones</button><button class="' + (e.kind === 'num' ? 'on' : '') + '" data-a="ge-kind" data-v="num">Valeur chiffrée</button></div>';
-  if (e.kind === 'num') {
-    h += '<label class="lbl" for="ge_unit">Unité</label><input class="inp" id="ge_unit" maxlength="12" value="' + esc(e.unit) + '" placeholder="FCFA, kg, pages…">' +
-      '<label class="lbl" for="ge_target">Cible</label><input class="inp" id="ge_target" inputmode="decimal" value="' + esc(e.target) + '">' +
-      '<label class="lbl" for="ge_start">Point de départ (facultatif)</label><input class="inp" id="ge_start" inputmode="decimal" value="' + esc(e.start) + '">';
-  }
-  h += '<label class="lbl" for="ge_startText">Point de départ, en mots (facultatif)</label><input class="inp" id="ge_startText" maxlength="120" value="' + esc(e.startText) + '">' +
-    '<label class="lbl" for="ge_targetText">Cible, en mots (facultatif)</label><input class="inp" id="ge_targetText" maxlength="120" value="' + esc(e.targetText) + '">' +
-    '<span class="lbl">Statut</span><div class="seg">' + [['auto', 'Automatique'], ['not', STATUS.not], ['prog', STATUS.prog], ['done', STATUS.done]].map(function (o) { return '<button class="' + (e.status === o[0] ? 'on' : '') + '" data-a="ge-status" data-v="' + o[0] + '">' + o[1] + '</button>'; }).join('') + '</div>' +
-    '<div class="btns" style="margin-top:20px"><button class="btn" data-a="goal-save">Enregistrer</button><button class="btn ghost" data-a="modal-close">Annuler</button>' + (e.id ? '<button class="btn danger" data-a="goal-del">Supprimer</button>' : '') + '</div>';
-  openModal(h);
-}
-function saveGoal() {
-  syncGoalEd();
-  var e = gEd, name = e.name.trim();
-  if (!name) { toast('Donne un nom à l\'objectif.'); return; }
-  var g = e.id ? goalById(e.id) : null;
-  if (e.kind === 'num') {
-    var tg = num(e.target);
-    if (tg === null || tg <= 0) { toast('Entre une cible chiffrée valide.'); return; }
-    if (!g) g = { id: uid('g'), kind: 'num', hist: [], milestones: [] };
-    g.target = tg; g.unit = e.unit.trim();
-    var st = num(e.start);
-    if (st !== null) g.start = st;
-    else if (!(g.hist && g.hist.length)) g.start = null;
-  } else if (!g) g = { id: uid('g'), kind: 'ms', milestones: [] };
-  g.name = name; g.cat = e.cat; g.big = !!e.big; g.startText = e.startText.trim(); g.targetText = e.targetText.trim(); g.status = e.status || 'auto';
-  if (!e.id) S.goals.push(g);
-  memo = {};
-  save();
-  closeModal();
-  render();
-  toast('Objectif enregistré');
-}
-function delGoal() {
-  var id = gEd && gEd.id, g = id && goalById(id);
-  if (!g) return;
-  confirmBox('Supprimer cet objectif ?', '« ' + g.name + ' » et ses milestones seront supprimés.', 'Supprimer l\'objectif', true, function () {
-    S.goals = S.goals.filter(function (x) { return x.id !== id; });
-    var ids = g.milestones.map(function (m) { return m.id; });
-    S.chapters.forEach(function (c) { c.ms = c.ms.filter(function (x) { return ids.indexOf(x) < 0; }); });
-    memo = {};
-    save();
-    closeModal();
-    render();
-  });
-}
-function openChapEditor(key) {
-  var c = S.chapters.filter(function (x) { return x.key === key; })[0];
-  if (!c) return;
-  chEd = key;
-  openModal('<h3 class="h">MODIFIER LE CHAPITRE</h3><label class="lbl" for="ch_name">Nom</label><input class="inp" id="ch_name" maxlength="40" value="' + esc(c.name) + '">' +
-    '<label class="lbl" for="ch_theme">Thème</label><input class="inp" id="ch_theme" maxlength="80" value="' + esc(c.theme) + '">' +
-    '<label class="lbl" for="ch_int">Intention</label><textarea class="txt tx" id="ch_int" maxlength="400">' + esc(c.intention) + '</textarea>' +
-    '<label class="lbl" for="ch_obj">Objectifs du mois (un par ligne)</label><textarea class="txt tx" id="ch_obj">' + esc(c.objectives.join('\n')) + '</textarea>' +
-    '<label class="lbl" for="ch_ck">Checklist du chapitre (un élément par ligne)</label><textarea class="txt tx" id="ch_ck">' + esc(c.checklist.map(function (k) { return k.t; }).join('\n')) + '</textarea>' +
-    '<label class="lbl" for="ch_res">Résultat attendu</label><textarea class="txt tx" id="ch_res" maxlength="300">' + esc(c.result) + '</textarea>' +
-    '<div class="btns" style="margin-top:18px"><button class="btn" data-a="chap-save">Enregistrer</button><button class="btn ghost" data-a="modal-close">Annuler</button></div>');
-}
-function lines(id) { return (($('#' + id) || {}).value || '').split('\n').map(function (x) { return x.trim(); }).filter(Boolean); }
-function saveChap() {
-  var c = S.chapters.filter(function (x) { return x.key === chEd; })[0];
-  if (!c) return;
-  var nm = (($('#ch_name') || {}).value || '').trim();
-  if (!nm) { toast('Donne un nom au chapitre.'); return; }
-  c.name = nm;
-  c.theme = (($('#ch_theme') || {}).value || '').trim();
-  c.intention = (($('#ch_int') || {}).value || '').trim();
-  c.objectives = lines('ch_obj');
-  var old = {};
-  c.checklist.forEach(function (k) { old[k.t] = k; });
-  c.checklist = lines('ch_ck').map(function (t) { return old[t] || ck(t); });
-  c.result = (($('#ch_res') || {}).value || '').trim();
-  save();
-  closeModal();
-  render();
-  toast('Chapitre enregistré');
-}
-function openM31Editor() {
-  m31Ed = true;
-  openModal('<h3 class="h">MA VERSION DU 31 MARS</h3><p class="fine" style="margin-top:0">Un élément par ligne.</p>' + S.mar31.map(function (s) {
-    return '<label class="lbl" for="m31_' + s.id + '">' + esc(s.title) + '</label><textarea class="txt tx" id="m31_' + s.id + '">' + esc(s.items.join('\n')) + '</textarea>';
-  }).join('') + '<div class="btns" style="margin-top:18px"><button class="btn" data-a="m31-save">Enregistrer</button><button class="btn ghost" data-a="modal-close">Annuler</button></div>');
-}
-function saveM31() {
-  S.mar31.forEach(function (s) { s.items = lines('m31_' + s.id); });
-  save();
-  closeModal();
-  render();
-  toast('Ma version du 31 mars enregistrée');
-}
-function openMore() {
-  openModal('<h3 class="h">PLUS</h3><div class="upmenu">' +
-    '<button data-a="go" data-v="chapters"><b>Chapitres</b><small>Mes 7 mois, de septembre à mars</small></button>' +
-    '<button data-a="go" data-v="wins"><b>Wins</b><small>Mes victoires</small></button>' +
-    '<button data-a="go" data-v="mar31"><b>Mar 31</b><small>Ma version du 31 mars</small></button>' +
-    '<button data-a="go" data-v="settings"><b>Réglages</b><small>Tâches, objectifs, sauvegarde</small></button></div>' +
-    '<div class="btns"><button class="btn ghost block" data-a="modal-close">Fermer</button></div>');
-}
-
-/* ---------- actions phase 2 ---------- */
-function p2click(a, el) {
-  switch (a) {
-    case 'update': openUpdate('menu'); break;
-    case 'more-menu': openMore(); break;
-    case 'up-step': up.step = el.getAttribute('data-v'); renderUpdate(); break;
-    case 'up-back': up.step = 'menu'; renderUpdate(); break;
-    case 'up-save-value': saveValue(); break;
-    case 'up-status': { var g = goalById(up.goalId); if (g) { g.status = el.getAttribute('data-v'); memo = {}; save(); render(); renderUpdate(); toast('Statut mis à jour'); } break; }
-    case 'up-ms-toggle': { var r = el.closest('.ms'); toggleMs(r.getAttribute('data-g'), r.getAttribute('data-m')); render(); renderUpdate(); break; }
-    case 'up-ms-add': {
-      var nm = (($('#upMs') || {}).value || '').trim(), gg = goalById(up.goalId);
-      if (!nm) { toast('Écris le nom de la milestone.'); break; }
-      if (gg) { gg.milestones.push(M(uid('m'), nm)); memo = {}; save(); render(); renderUpdate(); }
-      break;
-    }
-    case 'up-save-win': if (addWin(($('#upWin') || {}).value, ($('#upWinDate') || {}).value)) { closeModal(); render(); toast('Victoire ajoutée'); } break;
-    case 'up-save-info': saveInfo(); break;
-    case 'info-edit': up = { step: 'info', from: 'settings' }; renderUpdate(); break;
-    case 'radar-cmp': radarCmp = el.getAttribute('data-v'); render(); break;
-    case 'radar-how': radarHow(); break;
-    case 'goal-value': openUpdate('value', el.getAttribute('data-g')); break;
-    case 'goal-edit': openGoalEditor(el.getAttribute('data-g')); break;
-    case 'goal-add': openGoalEditor(null, el.getAttribute('data-c')); break;
-    case 'ge-cat': syncGoalEd(); gEd.cat = el.getAttribute('data-v'); renderGoalEditor(); break;
-    case 'ge-big': syncGoalEd(); gEd.big = el.getAttribute('data-v') === '1'; renderGoalEditor(); break;
-    case 'ge-kind': syncGoalEd(); gEd.kind = el.getAttribute('data-v'); if (gEd.kind === 'num' && !gEd.unit) gEd.unit = 'FCFA'; renderGoalEditor(); break;
-    case 'ge-status': syncGoalEd(); gEd.status = el.getAttribute('data-v'); renderGoalEditor(); break;
-    case 'goal-save': saveGoal(); break;
-    case 'goal-del': delGoal(); break;
-    case 'ms-toggle': { var row = el.closest('.ms'); toggleMs(row.getAttribute('data-g'), row.getAttribute('data-m')); render(); break; }
-    case 'ms-auto': toast('Cette milestone se débloque toute seule avec tes habitudes.'); break;
-    case 'ms-edit': { var rw = el.closest('.ms'); openMsEditor(rw.getAttribute('data-g'), rw.getAttribute('data-m')); break; }
-    case 'ms-add': openMsEditor(el.getAttribute('data-g'), null); break;
-    case 'ms-save': saveMs(); break;
-    case 'ms-del': delMs(); break;
-    case 'chap-toggle': { var k = el.getAttribute('data-k'); chapOpen = chapOpen === k ? '-' : k; render(); break; }
-    case 'chap-open': chapOpen = el.getAttribute('data-k'); go('chapters'); break;
-    case 'ck-toggle': {
-      var c = S.chapters.filter(function (x) { return x.key === el.getAttribute('data-k'); })[0];
-      if (c) c.checklist.forEach(function (x) { if (x.id === el.getAttribute('data-i')) x.done = !x.done; });
-      save(); render(); break;
-    }
-    case 'chap-edit': openChapEditor(el.getAttribute('data-k')); break;
-    case 'chap-save': saveChap(); break;
-    case 'win-add': { var wi = $('#winText'); if (addWin(wi && wi.value, null)) { render(); toast('Victoire ajoutée'); } break; }
-    case 'win-del': { var wid = el.getAttribute('data-id'); S.wins = S.wins.filter(function (w) { return w.id !== wid; }); save(); render(); break; }
-    case 'm31-edit': openM31Editor(); break;
-    case 'm31-save': saveM31(); break;
-  }
-}
-
-/* ---------- rendu ---------- */
-function navBtn(n, side) {
-  var on = n.id === view || (n.id === 'goals' && !side && GOAL_VIEWS.indexOf(view) >= 0) || (n.id === 'more' && MORE_VIEWS.indexOf(view) >= 0);
-  var act = n.action ? n.action : 'go';
-  return '<button class="nav-item' + (on ? ' on' : '') + '" data-a="' + act + '"' + (n.action ? '' : ' data-v="' + n.id + '"') + ' aria-label="' + n.label + '"' + (on ? ' aria-current="page"' : '') + '>' + IC[n.ic] + '<span>' + n.label + '</span></button>';
-}
-function renderNav() {
-  var sideHtml = '<button class="upd" data-a="update">+ UPDATE</button>' + SIDE.map(function (n) {
-    if (n.group !== undefined) return n.group ? '<div class="nav-grp">' + n.group + '</div>' : '<div class="nav-sep"></div>';
-    return navBtn(n, true);
-  }).join('');
-  $('#sidenav').innerHTML = sideHtml;
-  $('#botnav').innerHTML = BOTTOM.map(function (n) { return navBtn(n, false); }).join('');
-}
-function viewHTML() {
-  switch (view) {
-    case 'home': return homeHTML();
-    case 'today': return todayHTML();
-    case 'progress': return radarSection() + progressHTML();
-    case 'goals': return goalsHTML();
-    case 'chapters': return chaptersHTML();
-    case 'wins': return winsHTML();
-    case 'mar31': return mar31HTML();
-    case 'settings': return settingsHTML();
-    default: return CATS.indexOf(view) >= 0 ? catHTML(view) : homeHTML();
-  }
-}
-function render(keepScroll) {
-  var y = window.pageYOffset || 0;
-  memo = {};
-  document.documentElement.setAttribute('data-accent', S.settings.accent === 'vert' ? 'vert' : 'or');
-  renderNav();
-  var el = $('#view');
-  el.className = 'wrap' + (view === 'home' ? '' : ' narrow');
-  el.innerHTML = viewHTML();
-  if (keepScroll !== false) window.scrollTo(0, y);
-}
-function go(v) {
-  if (VIEWS.indexOf(v) < 0) return;
-  view = v;
-  if (v === 'today') vdate = null;
-  openKey = null;
-  render(false);
-  window.scrollTo(0, 0);
-  try { if (location.hash !== '#' + v) location.hash = v; } catch (e) { /* hash indisponible */ }
-}
-function toast(msg) {
+function showToast(msg) {
   var t = $('#toast');
-  t.textContent = msg;
-  t.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(function () { t.hidden = true; }, 2600);
-}
-
-/* ---------- actions sur les cases ---------- */
-function toggle(tid, d) {
-  if (!canEdit(d)) return;
-  var cur = stOf(d, tid), key = tid + '|' + d;
-  if (cur === 'done' || cur === 'na') setSt(d, tid, null);
-  else { setSt(d, tid, 'done'); popKey = key; }
-  save();
-  render();
-  popKey = null;
-}
-function toggleNA(tid, d) {
-  if (!canEdit(d)) return;
-  setSt(d, tid, stOf(d, tid) === 'na' ? null : 'na');
-  save();
-  render();
-}
-
-/* ---------- fenêtres ---------- */
-function openModal(html) {
-  $('#modal').innerHTML = '<div class="modal" data-modal="1"><div class="sheet" role="dialog" aria-modal="true">' + html + '</div></div>';
-}
-function closeModal() { $('#modal').innerHTML = ''; ed = null; confirmCb = null; up = null; gEd = null; mEd = null; chEd = null; m31Ed = null; }
-function confirmBox(title, text, okLabel, danger, cb) {
-  confirmCb = cb;
-  openModal('<h3 class="h">' + esc(title) + '</h3><p class="kv" style="margin-top:0">' + esc(text) + '</p>' +
-    '<div class="btns"><button class="btn' + (danger ? ' danger' : '') + '" data-a="confirm-ok">' + esc(okLabel) + '</button><button class="btn ghost" data-a="modal-close">Annuler</button></div>');
-}
-
-function openEditor(id) {
-  if (id) {
-    var t = byId(id), v = verOf(t, effDate());
-    ed = { id: id, name: v.name, pillar: v.pillar, pr: v.pr, ft: v.f.t, days: (v.f.d || [0, 1, 2, 3, 4]).slice(), q: v.f.q || 4, dim: v.dim === undefined ? defaultDim(id, v.pillar) : v.dim };
-  } else {
-    ed = { id: null, name: '', pillar: 'life', pr: 'should', ft: 'daily', days: [0, 1, 2, 3, 4], q: 3, dim: null };
-  }
-  renderEditor();
-}
-function segBtns(action, cur, opts) {
-  return '<div class="seg">' + opts.map(function (o) {
-    return '<button type="button" class="' + (cur === o[0] ? 'on' : '') + '" data-a="' + action + '" data-v="' + o[0] + '">' + o[1] + '</button>';
-  }).join('') + '</div>';
-}
-function renderEditor() {
-  var h = '<h3 class="h">' + (ed.id ? 'MODIFIER LA TÂCHE' : 'NOUVELLE TÂCHE') + '</h3>' +
-    '<label class="lbl" for="edName">Nom</label><input class="inp" id="edName" maxlength="80" value="' + esc(ed.name) + '" placeholder="Ex. 20 min de vocabulaire">' +
-    '<span class="lbl">Catégorie</span>' + segBtns('ed-pillar', ed.pillar, [['deen', 'DEEN'], ['character', 'CHARACTER'], ['life', 'LIFE']]) +
-    (ed.pillar === 'life' ? '<span class="lbl">Radar : catégorie liée</span>' + segBtns('ed-dim', ed.dim || 'none', [['none', 'Aucune'], ['sport', 'Sport'], ['ia', 'IA'], ['lang', 'Langue'], ['business', 'Business'], ['finance', 'Finances']]) : '') +
-    '<span class="lbl">Priorité</span>' + segBtns('ed-pr', ed.pr, [['must', 'MUST DO'], ['should', 'SHOULD DO']]) +
-    '<span class="lbl">Fréquence</span>' + segBtns('ed-ft', ed.ft, [['daily', 'Tous les jours'], ['days', 'Certains jours'], ['weekly', 'Quota / semaine']]);
-  if (ed.ft === 'days') {
-    h += '<span class="lbl">Jours prévus</span><div class="days">' + DAYS_1.map(function (l, i) {
-      return '<button type="button" class="' + (ed.days.indexOf(i) >= 0 ? 'on' : '') + '" data-a="ed-day" data-v="' + i + '" aria-label="' + DAYS[i] + '">' + l + '</button>';
-    }).join('') + '</div>';
-  }
-  if (ed.ft === 'weekly') {
-    h += '<span class="lbl">Nombre de fois par semaine</span><div class="stepper"><button type="button" data-a="ed-q" data-v="-1" aria-label="Moins">−</button><strong>' + ed.q + '</strong><button type="button" data-a="ed-q" data-v="1" aria-label="Plus">+</button></div>';
-  }
-  h += '<div class="btns" style="margin-top:20px"><button class="btn" data-a="ed-save">Enregistrer</button><button class="btn ghost" data-a="modal-close">Annuler</button>' +
-    (ed.id ? '<button class="btn danger" data-a="ed-remove">Retirer</button>' : '') + '</div>' +
-    '<p class="fine">S\'applique à partir d\'aujourd\'hui. Le passé ne change pas.</p>';
-  openModal(h);
-}
-function syncEd() {
-  var n = $('#edName');
-  if (n && ed) ed.name = n.value;
-}
-function saveEditor() {
-  syncEd();
-  var name = ed.name.trim();
-  if (!name) { toast('Donne un nom à la tâche.'); return; }
-  if (ed.ft === 'days' && !ed.days.length) { toast('Choisis au moins un jour.'); return; }
-  var f = ed.ft === 'daily' ? { t: 'daily' } : ed.ft === 'days' ? { t: 'days', d: ed.days.slice().sort() } : { t: 'weekly', q: ed.q };
-  var eff = effDate(), ver = { from: eff, name: name, pillar: ed.pillar, pr: ed.pr, f: f, dim: ed.pillar === 'life' ? (ed.dim || null) : ed.pillar };
-  if (ed.id) {
-    var t = byId(ed.id);
-    var same = t.v.filter(function (v) { return v.from === eff; })[0];
-    if (same) { same.name = ver.name; same.pillar = ver.pillar; same.pr = ver.pr; same.f = ver.f; same.dim = ver.dim; }
-    else t.v.push(ver);
-    t.v.sort(function (a, b) { return a.from < b.from ? -1 : a.from > b.from ? 1 : 0; });
-  } else {
-    var mx = S.tasks.reduce(function (m, t) { return t.order > m ? t.order : m; }, -1);
-    S.tasks.push({ id: 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: eff, end: null, order: mx + 1, v: [ver] });
-  }
-  save();
-  closeModal();
-  render();
-  toast('Tâche enregistrée');
-}
-function removeTask(id) {
-  var t = byId(id), eff = effDate();
   if (!t) return;
-  if (t.start >= eff) {
-    S.tasks = S.tasks.filter(function (x) { return x.id !== id; });
-    Object.keys(S.log).forEach(function (d) { if (S.log[d][id]) { delete S.log[d][id]; tidy(d, id); } });
-  } else {
-    t.end = addDays(eff, -1);
-  }
-  save();
-  closeModal();
-  render();
-  toast('Tâche retirée à partir d\'aujourd\'hui');
-}
-
-/* ---------- sauvegarde ---------- */
-function markExport() {
-  S.settings.lastExport = new Date().toISOString();
-  save();
-}
-function copyText(txt) {
-  function fallback() {
-    try {
-      var ta = document.createElement('textarea');
-      ta.value = txt;
-      ta.setAttribute('readonly', '');
-      ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      var ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      return ok;
-    } catch (e) { return false; }
-  }
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    return navigator.clipboard.writeText(txt).then(function () { return true; }, function () { return fallback(); });
-  }
-  return Promise.resolve(fallback());
-}
-function doExportFile() {
-  if (!DL) return;
-  var td = todayStr();
-  DL.save({ filename: 'don-leveling-sauvegarde-' + td + '.json', data: backupText() }).then(function () {
-    markExport();
-    render();
-    toast('Sauvegarde exportée');
-  }, function (err) {
-    if (err && err.code === 'declined') { toast('Export annulé'); return; }
-    showExp = true;
-    render();
-    toast('Export impossible : copie le texte de sauvegarde.');
-  });
-}
-function doCopy() {
-  copyText(backupText()).then(function (ok) {
-    if (ok) { markExport(); toast('Sauvegarde copiée : colle-la dans une note ou un message à toi-même'); }
-    else { showExp = true; toast('Copie impossible : sélectionne le texte affiché'); }
-    render();
-  });
-}
-function tryImport(text) {
-  var o;
-  try { o = JSON.parse(text); } catch (e) { toast("Ce texte n'est pas une sauvegarde valide."); return; }
-  var data = o && o.data ? o.data : o;
-  if (!validState(data)) { toast("Ce texte n'est pas une sauvegarde DON LEVELING valide."); return; }
-  var n = Object.keys(data.log).length;
-  var when = o && o.exportedAt ? ' du ' + fmtLong(localYMD(o.exportedAt)) : '';
-  confirmBox('Importer cette sauvegarde ?', 'Tes données actuelles seront remplacées par la sauvegarde' + when + ' (' + pl(n, 'journée renseignée', 'journées renseignées') + ').', 'Remplacer mes données', true, function () {
-    S = migrate(cloneJSON(data));
-    if (o && o.exportedAt) S.settings.lastExport = o.exportedAt;
-    save();
-    closeModal();
-    showExp = false;
-    render();
-    toast('Sauvegarde importée');
-  });
-}
-
-/* ---------- événements ---------- */
-document.addEventListener('click', function (e) {
-  var m = e.target;
-  if (m.classList && m.classList.contains('modal')) { closeModal(); return; }
-  var el = m.closest ? m.closest('[data-a]') : null;
-  if (!el) return;
-  var a = el.getAttribute('data-a');
-  var row = el.closest('.task');
-  var tid = row && row.getAttribute('data-tid'), d = row && row.getAttribute('data-d');
-  switch (a) {
-    case 'go': if ($('#modal').innerHTML) closeModal(); go(el.getAttribute('data-v')); break;
-    case 'toggle': toggle(tid, d); break;
-    case 'more': openKey = openKey === tid + '|' + d ? null : tid + '|' + d; render(); break;
-    case 'na': toggleNA(tid, d); break;
-    case 'prev': { var p = addDays(vdate || defaultDate(), -1); if (p >= S.startedOn) { vdate = p; render(false); } break; }
-    case 'next': { var n = addDays(vdate || defaultDate(), 1); if (n <= lastDay()) { vdate = n; render(false); } break; }
-    case 'gotoday': vdate = null; render(false); break;
-    case 'opendate': vdate = el.getAttribute('data-d'); view = 'today'; openKey = null; render(false); window.scrollTo(0, 0); try { location.hash = 'today'; } catch (x) { } break;
-    case 'allhist': showAllHist = true; render(); break;
-    case 'accent': S.settings.accent = el.getAttribute('data-v'); save(); render(); break;
-    case 'edit': openEditor(el.getAttribute('data-id')); break;
-    case 'add': openEditor(null); break;
-    case 'ed-pillar': syncEd(); ed.pillar = el.getAttribute('data-v'); renderEditor(); break;
-    case 'ed-dim': syncEd(); ed.dim = el.getAttribute('data-v') === 'none' ? null : el.getAttribute('data-v'); renderEditor(); break;
-    case 'ed-pr': syncEd(); ed.pr = el.getAttribute('data-v'); renderEditor(); break;
-    case 'ed-ft': syncEd(); ed.ft = el.getAttribute('data-v'); renderEditor(); break;
-    case 'ed-day': {
-      syncEd();
-      var di = +el.getAttribute('data-v'), ix = ed.days.indexOf(di);
-      if (ix >= 0) ed.days.splice(ix, 1); else ed.days.push(di);
-      renderEditor();
-      break;
-    }
-    case 'ed-q': syncEd(); ed.q = Math.max(1, Math.min(7, ed.q + (+el.getAttribute('data-v')))); renderEditor(); break;
-    case 'ed-save': saveEditor(); break;
-    case 'ed-remove': {
-      var rid = ed && ed.id, rt = rid && byId(rid);
-      if (rt) {
-        var nm = verOf(rt, effDate()).name;
-        confirmBox('Retirer cette tâche ?', '« ' + nm + ' » disparaît à partir d\'aujourd\'hui. Les jours passés restent inchangés.', 'Retirer la tâche', true, function () { removeTask(rid); });
-      }
-      break;
-    }
-    case 'modal-close': closeModal(); break;
-    case 'confirm-ok': { var cb = confirmCb; if (cb) cb(); break; }
-    case 'export': doExportFile(); break;
-    case 'copy': doCopy(); break;
-    case 'showexp': showExp = true; render(); break;
-    case 'import': { var it = $('#impText'); if (it && it.value.trim()) tryImport(it.value); else toast('Colle d\'abord le texte de ta sauvegarde.'); break; }
-    case 'reset':
-      confirmBox('Tout réinitialiser ?', 'Toutes tes cases, notes et tâches personnalisées seront effacées de cet appareil. Pense à exporter une sauvegarde avant.', 'Tout effacer', true, function () {
-        try { window.localStorage.removeItem(KEY); } catch (x) { }
-        S = fresh();
-        save();
-        closeModal();
-        vdate = null;
-        showExp = false;
-        go('home');
-        toast('DON LEVELING réinitialisé');
-      });
-      break;
-    default: p2click(a, el);
-  }
-});
-document.addEventListener('input', function (e) {
-  var el = e.target;
-  if (el.classList && el.classList.contains('note')) {
-    var row = el.closest('.task');
-    if (row) { setNote(row.getAttribute('data-d'), row.getAttribute('data-tid'), el.value); save(); }
-  }
-});
-document.addEventListener('change', function (e) {
-  var el = e.target;
-  if (el.id === 'impFile' && el.files && el.files[0]) {
-    var fr = new FileReader();
-    fr.onload = function () { tryImport(String(fr.result)); };
-    fr.onerror = function () { toast('Lecture du fichier impossible.'); };
-    fr.readAsText(el.files[0]);
-    el.value = '';
-  } else if (el.id === 'upGoal' && up) {
-    up.goalId = el.value;
-    renderUpdate();
-  } else if (el.getAttribute && el.getAttribute('data-a') === 'pickdate') {
-    var v = el.value;
-    if (RE_DATE.test(v) && v >= S.startedOn && v <= lastDay()) { vdate = v; render(false); }
-  }
-});
-document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('#modal').innerHTML) closeModal(); });
-window.addEventListener('hashchange', function () {
-  var h = (location.hash || '').replace('#', '');
-  if (VIEWS.indexOf(h) >= 0 && h !== view) { view = h; if (h === 'today') vdate = null; openKey = null; render(false); window.scrollTo(0, 0); }
-});
-
-/* ---------- horloge ---------- */
-function tick() {
-  var n = new Date(), ds = todayStr();
-  $('#clock').textContent = pad(n.getHours()) + ':' + pad(n.getMinutes()) + ':' + pad(n.getSeconds());
-  var p = parts(ds);
-  $('#dateline').textContent = cap(DAYS[weekday(ds)]) + ' ' + p.d + ' ' + MONTHS_S[p.m - 1] + ' ' + p.y;
-  if (ds !== currentDay) { currentDay = ds; vdate = null; openKey = null; render(); }
+  t.textContent = msg;
+  t.removeAttribute('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.setAttribute('hidden', ''); }, 2800);
 }
 
 /* ---------- démarrage ---------- */
-function init() {
-  S = load();
-  save();
+S = loadState();
+saveState();
+
+document.addEventListener('DOMContentLoaded', function () {
   $('#brandRange').textContent = fmtRange();
-  var h = (location.hash || '').replace('#', '');
-  if (VIEWS.indexOf(h) >= 0) view = h;
-  render(false);
-  tick();
-  setInterval(tick, 1000);
-  document.addEventListener('visibilitychange', function () { if (!document.hidden) tick(); });
-  try {
-    if (window.claude && typeof window.claude.use === 'function') {
-      window.claude.use('downloads').then(function (d) { DL = d || null; if (view === 'settings' && !$('#modal').innerHTML) render(); }, function () { });
-    }
-  } catch (e) { /* export par copie uniquement */ }
-  if (window.__DL_TEST__) {
-    window.__DL_TEST__.api = {
-      get S() { return S; }, set S(v) { S = v; }, render: render, go: go, save: save, timeInfo: timeInfo,
-      streaks: streaks, byId: byId, dayStats: dayStats, rangeStats: rangeStats, weekCount: weekCount, plannedOn: plannedOn,
-      verOf: verOf, missedList: missedList, stOf: stOf, setSt: setSt, backupText: backupText, weeksStats: weeksStats,
-      dimValue: dimValue, radarData: radarData, goalStatus: goalStatus, goalById: goalById, msDate: msDate, chapterIndex: chapterIndex, allWins: allWins, findMs: findMs, toggleMs: toggleMs, migrate: migrate,
-      setDL: function (v) { DL = v; }, KEY: KEY
-    };
+  updateClock();
+  setInterval(updateClock, 1000);
+  renderApp();
+});
+
+function updateClock() {
+  var now = new Date();
+  var c = $('#clock');
+  var d = $('#dateline');
+  if (c) c.textContent = pad(now.getHours()) + ':' + pad(now.getMinutes()) + ':' + pad(now.getSeconds());
+  if (d) d.textContent = fmtLong(todayStr());
+}
+
+function renderApp() {
+  document.documentElement.setAttribute('data-accent', S.settings.accent || 'or');
+  renderNav();
+  renderView();
+}
+
+function renderNav() {
+  var sn = $('#sidenav');
+  var bn = $('#botnav');
+
+  if (sn) {
+    var html = '<button class="upd" data-a="update">+ UPDATE</button>';
+    SIDE.forEach(function (item) {
+      if (item.group !== undefined) {
+        if (item.group) html += '<div class="nav-grp">' + esc(item.group) + '</div>';
+        else html += '<div class="nav-sep"></div>';
+      } else {
+        var active = (view === item.id) ? ' on' : '';
+        html += '<button class="nav-item' + active + '" data-v="' + item.id + '">' +
+          (IC[item.ic] || '') + '<span>' + esc(item.label) + '</span></button>';
+      }
+    });
+    sn.innerHTML = html;
+  }
+
+  if (bn) {
+    var bhtml = '';
+    BOTTOM.forEach(function (item) {
+      var active = (view === item.id || (item.id === 'goals' && GOAL_VIEWS.indexOf(view) !== -1) || (item.id === 'more' && MORE_VIEWS.indexOf(view) !== -1)) ? ' on' : '';
+      var attr = item.action ? 'data-a="' + item.action + '"' : 'data-v="' + item.id + '"';
+      bhtml += '<button class="nav-item' + active + '" ' + attr + '>' +
+        (IC[item.ic] || '') + '<span>' + esc(item.label) + '</span></button>';
+    });
+    bn.innerHTML = bhtml;
   }
 }
-init();
-})();
 
+function renderView() {
+  var main = $('#view');
+  if (!main) return;
+
+  if (view === 'home') renderHome(main);
+  else if (view === 'today') renderToday(main);
+  else if (view === 'progress') renderProgress(main);
+  else if (view === 'settings') renderSettings(main);
+  else main.innerHTML = '<div class="card"><h2 class="h">Vue en développement</h2><p class="fine">Cette section sera complétée dans les prochaines étapes.</p></div>';
+}
+
+/* ---------- VUE ACCUEIL ---------- */
+function renderHome(el) {
+  var td = todayStr();
+  var ti = timeInfo(td);
+
+  var html = '<div class="home-grid">';
+
+  /* Carte Temps */
+  html += '<div class="card b-time"><div class="time-head">';
+  if (ti.phase === 'during') {
+    html += '<div><span class="time-pct">' + fr1(ti.pct) + '%</span></div>';
+    html += '<div class="time-lbl">Jour ' + ti.cur + ' sur ' + ti.total + '<br><span class="muted">' + ti.left + ' jours restants</span></div>';
+  } else if (ti.phase === 'before') {
+    html += '<div><span class="time-pct">0%</span></div><div class="time-lbl">Début dans ' + ti.daysUntil + ' j</div>';
+  } else {
+    html += '<div><span class="time-pct">100%</span></div><div class="time-lbl">Période terminée</div>';
+  }
+  html += '</div>';
+
+  var pWidth = ti.phase === 'during' ? ti.pct : (ti.phase === 'after' ? 100 : 0);
+  html += '<div class="track"><div class="fill" style="width:' + pWidth + '%"></div><div class="mark" style="left:' + pWidth + '%"></div></div>';
+  html += '<div class="time-meta"><span>1 SEPT. 2026</span><span>31 MARS 2027</span></div></div>';
+
+  /* Carte Résumé Aujourd'hui */
+  html += '<div class="card b-today"><div class="between row"><h2 class="h">AUJOURD\'HUI</h2><button class="btn sm ghost" data-v="today">Ouvrir</button></div>';
+  html += '<p class="fine">' + fmtLong(td) + '</p></div>';
+
+  /* Carte Score */
+  html += '<div class="card b-score"><h2 class="h">RÉGULARITÉ</h2><p class="fine">Statistiques globales en cours d\'intégration.</p></div>';
+
+  /* Accès rapide */
+  html += '<div class="card b-quick"><h2 class="h">ACCÈS RAPIDE</h2><div class="quick">';
+  html += '<button class="qbtn" data-v="today">' + IC.check + 'Aujourd\'hui</button>';
+  html += '<button class="qbtn" data-v="progress">' + IC.chart + 'Progrès</button>';
+  html += '<button class="qbtn" data-v="settings">' + IC.sliders + 'Réglages</button>';
+  html += '</div></div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+/* ---------- VUE AUJOURD'HUI ---------- */
+function renderToday(el) {
+  if (!vdate) vdate = todayStr();
+
+  var html = '<div class="datebar">';
+  html += '<button class="arrow" id="prevDate">' + IC.left + '</button>';
+  html += '<div class="datemid"><strong>' + fmtLong(vdate) + '</strong><small>' + (vdate === todayStr() ? "Aujourd'hui" : vdate) + '</small></div>';
+  html += '<button class="arrow" id="nextDate">' + IC.right + '</button>';
+  html += '</div>';
+
+  html += '<div class="card"><h2 class="h">CHECKLIST DU JOUR</h2>';
+  
+  if (S.tasks && S.tasks.length) {
+    html += '<div class="block">';
+    S.tasks.forEach(function(t) {
+      var version = t.v[t.v.length - 1];
+      var entry = S.log[vdate] && S.log[vdate][t.id];
+      var done = entry && entry.status === 'done';
+      
+      html += '<div class="task ' + (done ? 'done' : '') + '">';
+      html += '<button class="task-main" data-a="toggle-task" data-tid="' + t.id + '">';
+      html += '<div class="box">' + (done ? IC.check : '') + '</div>';
+      html += '<div class="t-body"><span class="t-name">' + esc(version.name) + '</span></div>';
+      html += '</button></div>';
+    });
+    html += '</div>';
+  } else {
+    html += '<p class="empty">Aucune tâche configurée.</p>';
+  }
+  
+  html += '</div>';
+  el.innerHTML = html;
+
+  /* Événements de navigation de date */
+  var pBtn = $('#prevDate', el);
+  var nBtn = $('#nextDate', el);
+  if (pBtn) pBtn.onclick = function() { vdate = addDays(vdate, -1); renderToday(el); };
+  if (nBtn) nBtn.onclick = function() { vdate = addDays(vdate, 1); renderToday(el); };
+}
+
+/* ---------- VUE PROGRESSION ---------- */
+function renderProgress(el) {
+  el.innerHTML = '<div class="card"><h2 class="h">PROGRESSION</h2><p class="fine">Suivi des habitudes et historique à venir.</p></div>';
+}
+
+/* ---------- VUE RÉGLAGES ---------- */
+function renderSettings(el) {
+  var html = '<div class="card"><h2 class="h">RÉGLAGES</h2>';
+  
+  html += '<div class="sgrp">THÈME VISUEL</div>';
+  html += '<div class="swatches">';
+  html += '<button class="sw ' + (S.settings.accent === 'or' ? 'on' : '') + '" data-a="set-theme" data-theme="or"><i style="background:#d6b25e"></i>Or</button>';
+  html += '<button class="sw ' + (S.settings.accent === 'vert' ? 'on' : '') + '" data-a="set-theme" data-theme="vert"><i style="background:#3b9e79"></i>Émeraude</button>';
+  html += '</div>';
+
+  html += '<div class="sgrp">DONNÉES</div>';
+  html += '<div class="btns">';
+  html += '<button class="btn sm ghost" data-a="export">Exporter les données</button>';
+  html += '<button class="btn sm danger" data-a="reset">Réinitialiser</button>';
+  html += '</div>';
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+/* ---------- GESTION DES ÉVÉNEMENTS GLOBATION ---------- */
+document.addEventListener('click', function (e) {
+  var tgt = e.target.closest('[data-v], [data-a]');
+  if (!tgt) return;
+
+  var v = tgt.getAttribute('data-v');
+  var a = tgt.getAttribute('data-a');
+
+  if (v) {
+    view = v;
+    renderApp();
+    window.scrollTo(0, 0);
+  } else if (a) {
+    if (a === 'more-menu') {
+      view = 'settings';
+      renderApp();
+    } else if (a === 'set-theme') {
+      S.settings.accent = tgt.getAttribute('data-theme');
+      saveState();
+      renderApp();
+    } else if (a === 'export') {
+      var dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(S, null, 2));
+      var dlAnchorElem = document.createElement('a');
+      dlAnchorElem.setAttribute("href", dataStr);
+      dlAnchorElem.setAttribute("download", "don-leveling-backup.json");
+      dlAnchorElem.click();
+      showToast('Export téléchargé');
+    } else if (a === 'reset') {
+      if (confirm('Voulez-vous vraiment réinitialiser toutes vos données ?')) {
+        S = fresh();
+        saveState();
+        renderApp();
+        showToast('Données réinitialisées');
+      }
+    } else if (a === 'toggle-task') {
+      var tid = tgt.getAttribute('data-tid');
+      if (!S.log[vdate]) S.log[vdate] = {};
+      var cur = S.log[vdate][tid] ? S.log[vdate][tid].status : null;
+      if (cur === 'done') {
+        delete S.log[vdate][tid];
+      } else {
+        S.log[vdate][tid] = { status: 'done', ts: new Date().toISOString() };
+      }
+      saveState();
+      renderToday($('#view'));
+    }
+  }
+});
+
+})();
 </script>
 </body>
 </html>
